@@ -1,0 +1,50 @@
+# ===========================
+# 🐍 BACKEND (Python)
+# ===========================
+# El entorno virtual (Pesadísimo, no subir nunca)
+backend/venv/
+backend/env/
+
+# Archivos compilados de Python (Basura temporal)
+backend/__pycache__/
+*.pyc
+
+# Base de datos (Privacidad y Binario)
+*.db
+*.sqlite3
+backend/biblioteca.db
+
+# Claves secretas (API Keys)
+.env
+.env.local
+.env.*
+
+# Carpetas de contenido subido por el usuario (PDFs y Fotos)
+# Ignoramos el contenido pero mantenemos la carpeta si existe
+backend/mis_apuntes/*
+!backend/mis_apuntes/.gitkeep
+backend/perfiles/*
+!backend/perfiles/.gitkeep
+
+# ===========================
+# ⚛️ FRONTEND (Node/Expo)
+# ===========================
+# Librerías (Se instalan con npm install)
+node_modules/
+
+# Archivos temporales de Expo
+.expo/
+dist/
+web-build/
+
+# Logs de errores
+npm-debug.log
+yarn-error.log
+
+# ===========================
+# 🖥️ SISTEMA
+# ===========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

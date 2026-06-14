@@ -812,7 +812,7 @@ const siguientePregunta = async () => {
              {/* 🗺️ EL NUEVO MAPA ESTILO DUOLINGO MEJORADO 🗺️ */}
               <ScrollView contentContainerStyle={{ alignItems: 'center', paddingTop: 50, paddingBottom: 150 }}>
                   {nivelesReales.map((tituloNivel, index) => {
-                      const estaDesbloqueado = index <= (retoActual?.nivel_actual || 0);
+                      const estaDesbloqueado = true; // 🔓 Candados desactivados: todos los niveles accesibles
                       const esElActual = index === retoActual?.nivel_actual;
                       const completado = index < (retoActual?.nivel_actual || 0);
 
@@ -874,10 +874,8 @@ const siguientePregunta = async () => {
                                   >
                                       {completado ? (
                                           <Ionicons name="checkmark" size={38} color="white" />
-                                      ) : esElActual ? (
-                                          <Ionicons name="play" size={35} color="white" style={{marginLeft: 5}} />
                                       ) : (
-                                          <Ionicons name="lock-closed" size={30} color={colors.icon} />
+                                          <Ionicons name="play" size={35} color="white" style={{marginLeft: 5}} />
                                       )}
                                   </TouchableOpacity>
 
@@ -944,7 +942,7 @@ const siguientePregunta = async () => {
               <ScrollView contentContainerStyle={{ paddingBottom: 100, paddingTop: 60, alignItems: 'center' }}>
                   
                   {configFases.map((fase, index) => {
-                      const estaDesbloqueada = fase.id <= faseMaxLocal;
+                      const estaDesbloqueada = true; // 🔓 Candados desactivados: todas las fases accesibles
                       const esLaActual = fase.id === faseMaxLocal;
                       const estaCompletada = fase.id < faseMaxLocal;
                       const esGratis = (retoActual.nivelJugado === 0 && fase.id === 1);

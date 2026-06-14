@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Platform } from 'react-native';
-import { useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from './api';
@@ -26,6 +26,7 @@ function formatT(seg: number) {
 }
 
 export default function ExamenOficialScreen() {
+  const router = useRouter();
   const params = useLocalSearchParams();
   const cursoId = params.cursoId ? parseInt(params.cursoId as string) : null;
   const cursoNombre = (params.cursoNombre as string) || 'Mis Apuntes';
@@ -384,11 +385,22 @@ export default function ExamenOficialScreen() {
 
           {res.fallos > 0 && (
             <Text style={{ color: colors.subtext, fontSize: 13, textAlign: 'center', marginTop: 16 }}>
-              Tus {res.fallos} fallos se guardaron para repasarlos en el Modo Fallos.
+              Tus {res.fallos} fallos se guardaron. ¡Practícalos ahora!
             </Text>
           )}
 
-          <TouchableOpacity style={{ backgroundColor: colors.tint, borderRadius: 16, padding: 16, alignItems: 'center', width: '100%', marginTop: 24, borderBottomWidth: 4, borderBottomColor: '#46A302' }} onPress={() => { setRes(null); setVista('config'); }}>
+          {/* 🔥 PRACTICAR LOS FALLOS DEL EXAMEN */}
+          {res.fallos > 0 && (
+            <TouchableOpacity
+              style={{ backgroundColor: '#FF4B4B', borderRadius: 16, padding: 16, alignItems: 'center', width: '100%', marginTop: 18, borderBottomWidth: 4, borderBottomColor: '#C53030', flexDirection: 'row', justifyContent: 'center', gap: 10 }}
+              onPress={() => router.replace({ pathname: '/test', params: { cursoId: String(cursoId), cursoNombre, modoFallos: '1' } })}
+            >
+              <Ionicons name="flame" size={20} color="#fff" />
+              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Practicar mis {res.fallos} fallos</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity style={{ backgroundColor: colors.tint, borderRadius: 16, padding: 16, alignItems: 'center', width: '100%', marginTop: 12, borderBottomWidth: 4, borderBottomColor: '#46A302' }} onPress={() => { setRes(null); setVista('config'); }}>
             <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Volver a exámenes</Text>
           </TouchableOpacity>
         </ScrollView>

@@ -238,7 +238,16 @@ export default function ExamenScreen() {
           ]);
       }
   };
-  
+
+  // 🔥 Auto-lanzar Modo Fallos al llegar desde el Examen Oficial (?modoFallos=1)
+  const autoFallosRef = React.useRef(false);
+  useEffect(() => {
+      if (params.modoFallos === '1' && cursoId && modoConfiguracion && !autoFallosRef.current) {
+          autoFallosRef.current = true;
+          jugarModoFallos();
+      }
+  }, [params.modoFallos, cursoId, modoConfiguracion]);
+
   const generarTestDesdeTab = async () => {
     if (!apunteSeleccionado) return Alert.alert("Ojo", "Selecciona un apunte primero");
     

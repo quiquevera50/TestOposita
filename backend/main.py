@@ -1,6 +1,7 @@
 import os
 import shutil
 import json
+import hashlib
 import requests
 from psycopg2.extras import RealDictCursor
 import uuid
@@ -398,7 +399,158 @@ def comprar_energia(cantidad: int, user_id: int = Depends(verificar_token)):
         return {"status": "ok", "energia": nueva_energia}
     finally:
         conn.close()
-        
+
+# ==========================================
+# 💎 ECONOMÍA UNIFICADA (vidas, rubíes, racha, estrellas, xp)
+# ==========================================
+
+@app.get("/economia")
+def obtener_economia(user_id: int = Depends(verificar_token)):
+    """Una sola llamada que devuelve TODA la economía del usuario."""
+    conn = get_db_connection()
+    try:
+        # Vidas (energía) — usamos la lógica de recarga ya existente
+        vidas, ultima_recarga = sincronizar_energia(user_id, conn)
+        segundos_restantes = 0
+        if vidas < 5 and ultima_recarga:
+            proxima = ultima_recarga + timedelta(hours=1)
+            segundos_restantes = max(0, int((proxima - datetime.now(timezone.utc)).total_seconds()))
+
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT xp, nivel, rubies, racha_dias FROM users WHERE id = %s", (user_id,))
+        u = cursor.fetchone()
+        if not u:
+            raise HTTPException(404, "Usuario no encontrado")
+
+        # Estrellas totales = suma de estrellas de todos los niveles de los retos del usuario
+        cursor.execute("""
+            SELECT COALESCE(SUM(n.estrellas), 0) AS total
+            FROM niveles n
+            JOIN retos r ON n.reto_id = r.id
+            WHERE r.user_id = %s
+        """, (user_id,))
+        estrellas_totales = cursor.fetchone()['total']
+
+        xp_siguiente = int(u['nivel'] * 100 * 1.2)
+
+        return {
+            "vidas": vidas,
+            "vidas_max": 5,
+            "segundos_restantes": segundos_restantes,
+            "rubies": u['rubies'] or 0,
+            "racha_dias": u['racha_dias'] or 0,
+            "estrellas_totales": estrellas_totales,
+            "xp": u['xp'] or 0,
+            "nivel": u['nivel'] or 1,
+            "xp_siguiente": xp_siguiente,
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/registrar-actividad")
+def registrar_actividad(user_id: int = Depends(verificar_token)):
+    """Actualiza la racha diaria. Se llama al completar una lección."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT racha_dias, ultima_actividad FROM users WHERE id = %s", (user_id,))
+        u = cursor.fetchone()
+
+        hoy = datetime.now(timezone.utc).date()
+        ultima = u['ultima_actividad']
+        racha = u['racha_dias'] or 0
+        incrementada = False
+
+        if ultima == hoy:
+            pass  # Ya contó hoy, no cambia
+        elif ultima == hoy - timedelta(days=1):
+            racha += 1  # Día consecutivo
+            incrementada = True
+        else:
+            racha = 1  # Primera vez o se rompió la racha
+            incrementada = True
+
+        cursor.execute("UPDATE users SET racha_dias = %s, ultima_actividad = %s WHERE id = %s",
+                       (racha, hoy, user_id))
+        conn.commit()
+        return {"racha_dias": racha, "incrementada": incrementada}
+    finally:
+        conn.close()
+
+
+@app.post("/ganar-rubies/{cantidad}")
+def ganar_rubies(cantidad: int, user_id: int = Depends(verificar_token)):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("UPDATE users SET rubies = COALESCE(rubies,0) + %s WHERE id = %s RETURNING rubies",
+                       (cantidad, user_id))
+        nuevos = cursor.fetchone()['rubies']
+        conn.commit()
+        return {"status": "ok", "rubies": nuevos}
+    finally:
+        conn.close()
+
+
+@app.post("/gastar-rubies/{cantidad}")
+def gastar_rubies(cantidad: int, user_id: int = Depends(verificar_token)):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT rubies FROM users WHERE id = %s", (user_id,))
+        actuales = cursor.fetchone()['rubies'] or 0
+        if actuales < cantidad:
+            raise HTTPException(400, "No tienes suficientes rubíes")
+        cursor.execute("UPDATE users SET rubies = rubies - %s WHERE id = %s RETURNING rubies",
+                       (cantidad, user_id))
+        nuevos = cursor.fetchone()['rubies']
+        conn.commit()
+        return {"status": "ok", "rubies": nuevos}
+    finally:
+        conn.close()
+
+
+@app.post("/guardar-estrellas/{reto_id}/{numero_nivel}/{estrellas}")
+def guardar_estrellas(reto_id: int, numero_nivel: int, estrellas: int, user_id: int = Depends(verificar_token)):
+    """Guarda las estrellas de un nivel (solo si mejora el récord anterior)."""
+    if estrellas < 0 or estrellas > 3:
+        raise HTTPException(400, "Las estrellas deben estar entre 0 y 3")
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        # Verificar que el reto es del usuario
+        cursor.execute("SELECT id FROM retos WHERE id = %s AND user_id = %s", (reto_id, user_id))
+        if not cursor.fetchone():
+            raise HTTPException(403, "Reto no encontrado")
+
+        cursor.execute("SELECT id, estrellas FROM niveles WHERE reto_id = %s AND numero_nivel = %s",
+                       (reto_id, numero_nivel))
+        nivel = cursor.fetchone()
+
+        rubies_ganados = 0
+        if nivel:
+            anterior = nivel['estrellas'] or 0
+            if estrellas > anterior:
+                cursor.execute("UPDATE niveles SET estrellas = %s WHERE id = %s", (estrellas, nivel['id']))
+                # Bonus: +5 rubíes la primera vez que se logran 3 estrellas
+                if estrellas == 3 and anterior < 3:
+                    rubies_ganados = 5
+        else:
+            cursor.execute("INSERT INTO niveles (reto_id, numero_nivel, estrellas, desbloqueado) VALUES (%s, %s, %s, TRUE)",
+                           (reto_id, numero_nivel, estrellas))
+            if estrellas == 3:
+                rubies_ganados = 5
+
+        if rubies_ganados:
+            cursor.execute("UPDATE users SET rubies = COALESCE(rubies,0) + %s WHERE id = %s",
+                           (rubies_ganados, user_id))
+        conn.commit()
+        return {"status": "ok", "estrellas": estrellas, "rubies_ganados": rubies_ganados}
+    finally:
+        conn.close()
+
+
 # METODOS PARA CREAR CURSOS Y VINCULAR APUNTES A CURSOS
 
 # Modelo para crear curso
@@ -558,12 +710,13 @@ async def subir_apunte_biblioteca(
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(
-            "INSERT INTO apuntes (user_id, curso_id, nombre, ruta_archivo, categorias) VALUES (%s, %s, %s, %s, %s)", 
+            "INSERT INTO apuntes (user_id, curso_id, nombre, ruta_archivo, categorias) VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (user_id, curso_id, file.filename, res_url, categorias)
         )
+        apunte_id = cursor.fetchone()['id']
         conn.commit()
         conn.close()
-        return {"mensaje": "Apunte guardado en la nube correctamente"}
+        return {"mensaje": "Apunte guardado en la nube correctamente", "apunte_id": apunte_id}
     except Exception as e:
         print(f"❌ Error crítico subiendo a Supabase: {e}")
         raise HTTPException(500, "Error interno del servidor")
@@ -737,6 +890,159 @@ async def generar_test_id(apunte_id: int, cantidad: int = 10):
     # 💥 Si el bucle termina y llegamos aquí, TODAS las IAs fallaron
     print("❌ ERROR CRÍTICO: Ninguna IA pudo generar el test.")
     raise HTTPException(503, "Todos los servicios de IA están saturados. Inténtalo más tarde.")
+
+
+# ==========================================
+# 📄 RESUMEN IA DEL PDF (esquema / completo)
+# ==========================================
+@app.get("/resumen/{apunte_id}")
+def obtener_resumen_cache(apunte_id: int, modo: str = "esquema", user_id: int = Depends(verificar_token)):
+    """Devuelve el resumen guardado si existe (carga instantánea)."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT r.contenido FROM resumenes r
+            JOIN apuntes a ON r.apunte_id = a.id
+            WHERE r.apunte_id = %s AND r.modo = %s AND a.user_id = %s
+        """, (apunte_id, modo, user_id))
+        row = cursor.fetchone()
+        if row:
+            return {"resumen": row['contenido'], "modo": modo, "cacheado": True}
+        return {"resumen": None, "modo": modo, "cacheado": False}
+    finally:
+        conn.close()
+
+
+@app.post("/generar-resumen/{apunte_id}")
+async def generar_resumen_pdf(apunte_id: int, modo: str = "esquema", forzar: bool = False, user_id: int = Depends(verificar_token)):
+    if modo not in ("esquema", "completo"):
+        raise HTTPException(400, "Modo inválido (usa 'esquema' o 'completo')")
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT ruta_archivo, nombre FROM apuntes WHERE id = %s AND user_id = %s",
+                       (apunte_id, user_id))
+        apunte = cursor.fetchone()
+        # Si ya existe en caché y no se fuerza, lo devolvemos al instante
+        if not forzar:
+            cursor.execute("SELECT contenido FROM resumenes WHERE apunte_id = %s AND modo = %s", (apunte_id, modo))
+            cache = cursor.fetchone()
+            if cache and cache['contenido']:
+                return {"resumen": cache['contenido'], "modo": modo, "nombre": apunte['nombre'] if apunte else "", "cacheado": True}
+    finally:
+        conn.close()
+
+    if not apunte:
+        raise HTTPException(404, "Apunte no encontrado")
+
+    class FakeUploadFile:
+        def __init__(self, path): self.path = path
+
+    for ia in AIFactory.get_fallback_sequence():
+        if not hasattr(ia, "generar_resumen"):
+            continue
+        try:
+            texto = await ia.generar_resumen(FakeUploadFile(apunte['ruta_archivo']), modo)
+            if texto and len(texto.strip()) > 0:
+                # Guardar en caché (upsert)
+                c2 = get_db_connection()
+                try:
+                    cur2 = c2.cursor()
+                    cur2.execute("""
+                        INSERT INTO resumenes (apunte_id, modo, contenido) VALUES (%s, %s, %s)
+                        ON CONFLICT (apunte_id, modo) DO UPDATE SET contenido = EXCLUDED.contenido, fecha = CURRENT_TIMESTAMP
+                    """, (apunte_id, modo, texto))
+                    c2.commit()
+                finally:
+                    c2.close()
+                return {"resumen": texto, "modo": modo, "nombre": apunte['nombre'], "cacheado": False}
+        except Exception as e:
+            print(f"⚠️ Error resumen en {ia.__class__.__name__}: {e}")
+            continue
+
+    raise HTTPException(503, "No se pudo generar el resumen. Inténtalo más tarde.")
+
+
+# ==========================================
+# ❌ BANCO DE FALLOS (preguntas falladas para reentrenar)
+# ==========================================
+def _hash_pregunta(p: dict) -> str:
+    """Hash estable del texto de la pregunta (para deduplicar)."""
+    texto = (p.get("Pregunta") or p.get("pregunta") or "").strip().lower()
+    return hashlib.md5(texto.encode("utf-8")).hexdigest()
+
+
+@app.post("/registrar-fallos")
+def registrar_fallos(datos: dict, user_id: int = Depends(verificar_token)):
+    """Guarda preguntas falladas. Si ya existían, suma +1 a veces_fallada."""
+    curso_id = datos.get("curso_id")
+    preguntas = datos.get("preguntas", []) or []
+    if not preguntas:
+        return {"status": "ok", "guardados": 0}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        guardados = 0
+        for p in preguntas:
+            h = _hash_pregunta(p)
+            if not h:
+                continue
+            cur.execute("""
+                INSERT INTO fallos (user_id, curso_id, pregunta_json, hash)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, curso_id, hash)
+                DO UPDATE SET veces_fallada = fallos.veces_fallada + 1, fecha = CURRENT_TIMESTAMP
+            """, (user_id, curso_id, json.dumps(p), h))
+            guardados += 1
+        conn.commit()
+        return {"status": "ok", "guardados": guardados}
+    finally:
+        conn.close()
+
+
+@app.get("/fallos/{curso_id}")
+def obtener_fallos(curso_id: int, user_id: int = Depends(verificar_token)):
+    """Devuelve las preguntas falladas de un curso (para el Modo Fallos)."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT pregunta_json, veces_fallada FROM fallos
+            WHERE user_id = %s AND curso_id = %s
+            ORDER BY veces_fallada DESC, fecha DESC
+        """, (user_id, curso_id))
+        rows = cur.fetchall()
+        preguntas = []
+        for r in rows:
+            try:
+                preguntas.append(json.loads(r['pregunta_json']))
+            except Exception:
+                continue
+        return {"total": len(preguntas), "preguntas": preguntas}
+    finally:
+        conn.close()
+
+
+@app.post("/superar-fallo")
+def superar_fallo(datos: dict, user_id: int = Depends(verificar_token)):
+    """Elimina una pregunta del banco (acertada en Modo Fallos = dominada)."""
+    curso_id = datos.get("curso_id")
+    pregunta = datos.get("pregunta")
+    h = _hash_pregunta(pregunta) if pregunta else datos.get("hash")
+    if not h:
+        return {"status": "ok"}
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM fallos WHERE user_id = %s AND curso_id = %s AND hash = %s",
+                    (user_id, curso_id, h))
+        conn.commit()
+        return {"status": "ok"}
+    finally:
+        conn.close()
 
 
 @app.post("/guardar-resultado-test")

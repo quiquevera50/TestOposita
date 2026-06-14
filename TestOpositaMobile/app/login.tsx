@@ -24,31 +24,19 @@ export default function LoginScreen() {
 
   const verificarSesionSegura = async () => {
     try {
-      // 1. Recuperamos lo que el móvil "recuerda"
       const storedId = await AsyncStorage.getItem('user_id');
       const storedUsername = await AsyncStorage.getItem('username');
-      
-      if (storedId && storedUsername) {
-        // 2. Preguntamos al servidor quién es ese ID realmente
-        const response = await api.get(`/usuario`);
-        const serverUser = response.data;
 
-        // 3. 🛑 PRUEBA DE SEGURIDAD: ¿Coinciden los nombres?
-        // Si el servidor dice que el ID 1 es "Maria" pero el móvil recuerda "Pepe",
-        // significa que la base de datos cambió. ¡EXPULSAR!
-        if (serverUser.username === storedUsername) {
-            router.replace('/(tabs)');
-            return; // Importante parar aquí
-        } else {
-            console.log("⚠️ ALERTA DE SEGURIDAD: El ID existe pero el usuario no coincide.");
-            throw new Error("Datos de sesión inconsistentes");
-        }
+      if (storedId && storedUsername) {
+        // MODO DEMO: si hay sesión local, entramos directamente sin verificar con el servidor
+        router.replace('/(tabs)');
+        return;
       }
     } catch (error) {
-      console.log("Sesión no válida o expirada. Limpiando credenciales...");
-      await AsyncStorage.clear(); // Borramos todo rastro
+      console.log("Sesión no válida. Limpiando...");
+      await AsyncStorage.clear();
     } finally {
-      setCheckingSession(false); // Terminamos de comprobar
+      setCheckingSession(false);
     }
   };
 
@@ -87,15 +75,14 @@ export default function LoginScreen() {
         setIsRegistering(false);
       } else {
         const { token, user_id, avatar } = response.data;
-        
-        // 💾 GUARDAMOS CREDENCIALES COMPLETAS
+
         await AsyncStorage.multiSet([
             ['userToken', token],
             ['user_id', user_id.toString()],
-            ['username', username], // <--- ESTO ES CLAVE PARA LA SEGURIDAD
+            ['username', username],
             ['avatar', avatar || '']
         ]);
-        
+
         router.replace('/(tabs)');
       }
 
@@ -184,13 +171,11 @@ export default function LoginScreen() {
             <Text style={styles.btnText}>{isRegistering ? "Crear Cuenta" : "Entrar"}</Text>
         )}
       </TouchableOpacity>
-       {/* 🛑 MODO BETA: BOTÓN DE REGISTRO OCULTO TEMPORALMENTE 🛑
       <TouchableOpacity onPress={() => setIsRegistering(!isRegistering)} style={styles.switchContainer}>
         <Text style={[styles.switchText, { color: colors.tint }]}>
             {isRegistering ? "¿Ya tienes cuenta? Inicia sesión" : "¿Eres nuevo? Regístrate aquí"}
         </Text>
       </TouchableOpacity>
-      */}
     </View>
   );
 }

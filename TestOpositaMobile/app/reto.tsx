@@ -10,6 +10,8 @@ import { useTheme } from '../context/ThemeContext';
 import { useGameFeedback } from '../hooks/useGameFeedback'; // Ajusta la ruta según donde lo creaste
 import { useTaskManager } from '../context/TaskManagerContext';
 import { useEnergy } from '../context/EnergyContext';
+import { useEconomy } from '../context/EconomyContext';
+import { useSafeBack } from '../hooks/useSafeBack';
 //  FUNCIÓN MAESTRA PARA EL CUADERNO DE MISIONES 
 export const registrarProgresoMisiones = async (tipo: 'test' | 'reto' | 'oficial', xpGanada: number) => {
     try {
@@ -73,12 +75,19 @@ export default function EntrenarScreen() {
   const [puntuacion, setPuntuacion] = useState(0);
   const [showVictoria, setShowVictoria] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
-  const { feedbackAcierto, feedbackError, feedbackSeleccion } = useGameFeedback();
+  const { feedbackAcierto, feedbackError, feedbackSeleccion, feedbackComodin, feedbackVictoria } = useGameFeedback();
+  const { ganarRubies } = useEconomy();
   //  NUEVOS ESTADOS PARA EL MODO REPASO
   const [preguntasFalladas, setPreguntasFalladas] = useState<any[]>([]); // La bolsa de errores
   const [listaRepaso, setListaRepaso] = useState<any[]>([]); // La ronda de repaso activa
   const [modoRepaso, setModoRepaso] = useState(false); // ¿Estamos en ronda normal o de repaso?
   const [showTransicionErrores, setShowTransicionErrores] = useState(false); // Modal intermedio
+  // 🎮 MECÁNICAS DE JUEGO (racha, comodines, desintegración)
+  const [rachaJuego, setRachaJuego] = useState(0);          // Aciertos seguidos
+  const [comodines, setComodines] = useState(0);            // 50/50 disponibles
+  const [opcionesEliminadas, setOpcionesEliminadas] = useState<number[]>([]); // Opciones quitadas por comodín
+  const [showComodinGanado, setShowComodinGanado] = useState(false);
+  const [rubiesGanadosFase, setRubiesGanadosFase] = useState(0);
     // 🌟 ANIMACIÓN DE LATIDO PARA EL MAPA
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
   
@@ -201,7 +210,7 @@ const cargarUsuarioYRetos = async () => {
       Alert.alert("Trabajando en ello 🧠", "La IA está creando tu reto. Te hemos cobrado 1⚡, por lo que la Fase 1 ya la tienes pagada y será gratis.");
   };
 
-  const volver = () => router.back();
+  const volver = useSafeBack(cursoId ? { pathname: '/curso/[id]', params: { id: String(cursoId), nombre: cursoNombre } } : '/(tabs)');
   
   // ENTRAR EN RETO
   const abrirMapaReto = (reto: any) => {
@@ -267,12 +276,17 @@ const cargarUsuarioYRetos = async () => {
       setFaseActual(numFase);
       setIndicePregunta(0);
       setPuntuacionFase(0);
-      
+
       // Limpiamos los estados de repaso
-      setPreguntasFalladas([]); 
-      setListaRepaso([]);       
-      setModoRepaso(false);     
-      
+      setPreguntasFalladas([]);
+      setListaRepaso([]);
+      setModoRepaso(false);
+
+      // Reinicio de mecánicas de juego
+      setRachaJuego(0);
+      setComodines(0);
+      setRubiesGanadosFase(0);
+
       resetEstadoPregunta();
       setVista('juego');
   };
@@ -312,6 +326,7 @@ const cargarUsuarioYRetos = async () => {
       setTextoRespuesta('');
       setMostrarExplicacion(false);
       setEsCorrectaAbierta(null);
+      setOpcionesEliminadas([]);
   };
 
 
@@ -330,13 +345,41 @@ const cargarUsuarioYRetos = async () => {
       const preg = preguntasActuales[indicePregunta];
       
       if (idx === preg.respuesta_correcta) {
-          setPuntuacionFase(p => p + 1);  
-          feedbackAcierto(); 
+          setPuntuacionFase(p => p + 1);
+          feedbackAcierto();
+          // 🔥 Racha: cada 5 aciertos seguidos → comodín 50/50
+          setRachaJuego(prev => {
+              const nueva = prev + 1;
+              if (nueva > 0 && nueva % 5 === 0) {
+                  setComodines(c => c + 1);
+                  setShowComodinGanado(true);
+                  feedbackComodin();
+                  setTimeout(() => setShowComodinGanado(false), 1800);
+              }
+              return nueva;
+          });
       } else {
           feedbackError();
+          setRachaJuego(0); // Se rompe la racha
           //  ¡Al saco de errores para luego
-          setPreguntasFalladas(prev => [...prev, preg]); 
+          setPreguntasFalladas(prev => [...prev, preg]);
       }
+  };
+
+  // 🃏 Usar comodín 50/50: elimina 2 opciones incorrectas
+  const usarComodin = () => {
+      if (comodines <= 0 || mostrarExplicacion || opcionesEliminadas.length > 0) return;
+      const preguntasActuales = modoRepaso ? listaRepaso : (preguntasNivel[`fase_${faseActual}`] || []);
+      const preg = preguntasActuales[indicePregunta];
+      if (!preg) return;
+      const incorrectas = preg.opciones
+          .map((_: any, i: number) => i)
+          .filter((i: number) => i !== preg.respuesta_correcta);
+      // Barajar y quitar 2 (o las que haya si son menos)
+      const aEliminar = incorrectas.sort(() => Math.random() - 0.5).slice(0, Math.min(2, incorrectas.length));
+      setOpcionesEliminadas(aEliminar);
+      setComodines(c => c - 1);
+      feedbackComodin();
   };
 
   // B. Tipo Texto (Huecos / Abierta)
@@ -379,6 +422,7 @@ const siguientePregunta = async () => {
     setTextoRespuesta('');
     setMostrarExplicacion(false);
     setEsCorrectaAbierta(null);
+    setOpcionesEliminadas([]);
 
     const preguntasActuales = modoRepaso ? listaRepaso : (preguntasNivel[`fase_${faseActual}`] || []);
 
@@ -411,6 +455,12 @@ const siguientePregunta = async () => {
                     refrescarListaRetos(); 
                 }
                 await registrarProgresoMisiones('reto', xpParaMisiones);
+
+                // 💎 Recompensa en rubíes: +10 por fase, +20 extra al cerrar el nivel (fase 3)
+                let rubies = 10;
+                if (faseActual === 3 && retoActual.nivelJugado === retoActual.nivel_actual) rubies += 20;
+                setRubiesGanadosFase(rubies);
+                ganarRubies(rubies);
             } catch (e) {
                 console.log("Error servidor");
             } finally {
@@ -420,9 +470,11 @@ const siguientePregunta = async () => {
             setXpGanadaFase(xpRecibida);
 
             if (faseActual < 3) {
-                setShowIntermedio(true); 
+                feedbackVictoria();
+                setShowIntermedio(true);
             } else {
-                setShowVictoria(true); 
+                feedbackVictoria();
+                setShowVictoria(true);
             }
         }
     }
@@ -937,17 +989,43 @@ const siguientePregunta = async () => {
                           {modoRepaso ? "Repaso " : ""}{indicePregunta + 1} / {preguntasActuales.length}
                       </Text>
 
-                      {/* Puntos */}
-                      <View style={styles.badgePuntos}>
-                          <Text style={{color:'white', fontWeight:'bold'}}>⭐ {puntuacionFase}</Text>
+                      {/* Racha + Puntos */}
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                          {rachaJuego > 1 && (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FF9600', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, gap: 3 }}>
+                                  <Ionicons name="flame" size={14} color="#fff" />
+                                  <Text style={{ color: 'white', fontWeight: '800' }}>{rachaJuego}</Text>
+                              </View>
+                          )}
+                          <View style={styles.badgePuntos}>
+                              <Text style={{ color: 'white', fontWeight: 'bold' }}>⭐ {puntuacionFase}</Text>
+                          </View>
                       </View>
                   </View>
 
-                  {/* ETIQUETA TIPO */}
-                  <View style={[styles.badgeTipo, esVF && {backgroundColor: colors.success}, esHuecos && {backgroundColor: '#8b5cf6'}]}>
-                      <Text style={{color:'white', fontWeight:'bold', textTransform:'uppercase'}}>
-                          {esVF ? "Verdadero / Falso" : (esHuecos ? "Completa la frase" : "Test")}
-                      </Text>
+                  {/* ETIQUETA TIPO + COMODÍN */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <View style={[styles.badgeTipo, { marginBottom: 0 }, esVF && {backgroundColor: colors.success}, esHuecos && {backgroundColor: '#8b5cf6'}]}>
+                          <Text style={{color:'white', fontWeight:'bold', textTransform:'uppercase'}}>
+                              {esVF ? "Verdadero / Falso" : (esHuecos ? "Completa la frase" : "Test")}
+                          </Text>
+                      </View>
+
+                      {/* 🃏 COMODÍN 50/50 (solo en tipo test) */}
+                      {!esVF && !esHuecos && (
+                          <TouchableOpacity
+                              onPress={usarComodin}
+                              disabled={comodines <= 0 || mostrarExplicacion || opcionesEliminadas.length > 0}
+                              style={{
+                                  flexDirection: 'row', alignItems: 'center', gap: 5,
+                                  backgroundColor: (comodines > 0 && !mostrarExplicacion && opcionesEliminadas.length === 0) ? '#CE82FF' : (isDark ? '#334155' : '#e5e7eb'),
+                                  paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12,
+                              }}
+                          >
+                              <Text style={{ fontSize: 14 }}>🃏</Text>
+                              <Text style={{ color: (comodines > 0 && opcionesEliminadas.length === 0) ? '#fff' : colors.subtext, fontWeight: '800', fontSize: 13 }}>50/50 · {comodines}</Text>
+                          </TouchableOpacity>
+                      )}
                   </View>
 
                   {/* PREGUNTA (Color dinámico) */}
@@ -985,22 +1063,27 @@ const siguientePregunta = async () => {
                               if (op.toLowerCase() === 'falso') borderColor = colors.error;
                           }
 
+                          // 🃏 Opción desintegrada por el comodín 50/50
+                          const eliminada = opcionesEliminadas.includes(idx);
+
                           return (
-                              <TouchableOpacity 
-                                  key={idx} 
+                              <TouchableOpacity
+                                  key={idx}
                                   style={[
-                                      styles.opcionBtn, 
+                                      styles.opcionBtn,
                                       { backgroundColor, borderColor }, // Aplicamos colores calculados
-                                      esVF && styles.btnVF, 
-                                      esHuecos && styles.btnHueco
-                                  ]} 
+                                      esVF && styles.btnVF,
+                                      esHuecos && styles.btnHueco,
+                                      eliminada && { opacity: 0.25, borderStyle: 'dashed' }
+                                  ]}
                                   onPress={() => responderTest(idx)}
-                                  disabled={mostrarExplicacion}
+                                  disabled={mostrarExplicacion || eliminada}
                               >
                                   <Text style={[
-                                      styles.textoOpcion, 
+                                      styles.textoOpcion,
                                       { color: textColor }, // Aplicamos color de texto
-                                      esVF && {fontWeight: 'bold', fontSize: 18}
+                                      esVF && {fontWeight: 'bold', fontSize: 18},
+                                      eliminada && { textDecorationLine: 'line-through', color: colors.subtext }
                                   ]}>
                                       {op}
                                   </Text>
@@ -1044,6 +1127,20 @@ const siguientePregunta = async () => {
                   )}
               {/* ... (fin del ScrollView del juego) ... */}
             </ScrollView>
+
+          {/* 🃏 AVISO COMODÍN GANADO (toast flotante) */}
+            {showComodinGanado && (
+                <View style={{ position: 'absolute', top: 100, left: 0, right: 0, alignItems: 'center', zIndex: 100 }}>
+                    <View style={{ backgroundColor: '#CE82FF', paddingVertical: 12, paddingHorizontal: 22, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, elevation: 8 }}>
+                        <Text style={{ fontSize: 22 }}>🃏</Text>
+                        <View>
+                            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>¡Racha de 5! +1 comodín</Text>
+                            <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12 }}>Úsalo para eliminar 2 opciones</Text>
+                        </View>
+                    </View>
+                </View>
+            )}
+
           {/* 👇 1. MODAL DE TRANSICIÓN A ERRORES (LA ANIMACIÓN) 👇 */}
             <Modal visible={showTransicionErrores} transparent animationType="slide">
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center', alignItems: 'center' }}>
@@ -1082,9 +1179,17 @@ const siguientePregunta = async () => {
                             ¡Fase {faseActual} Superada!
                         </Text>
 
-                        <View style={{alignItems: 'center', marginVertical: 30}}>
-                            <Text style={{fontSize:16, color: colors.subtext}}>Experiencia obtenida</Text>
-                            <Text style={{fontSize:45, fontWeight:'bold', color: '#8b5cf6'}}>+{xpGanadaFase} XP</Text>
+                        <View style={{flexDirection:'row', gap: 30, marginVertical: 30}}>
+                            <View style={{alignItems: 'center'}}>
+                                <Text style={{fontSize:14, color: colors.subtext}}>Experiencia</Text>
+                                <Text style={{fontSize:34, fontWeight:'bold', color: '#8b5cf6'}}>+{xpGanadaFase}</Text>
+                                <Text style={{fontSize:12, color: colors.subtext}}>XP</Text>
+                            </View>
+                            <View style={{alignItems: 'center'}}>
+                                <Text style={{fontSize:14, color: colors.subtext}}>Rubíes</Text>
+                                <Text style={{fontSize:34, fontWeight:'bold', color: '#FF3B6B'}}>+{rubiesGanadosFase}</Text>
+                                <Text style={{fontSize:12, color: colors.subtext}}>💎</Text>
+                            </View>
                         </View>
 
                         <Text style={{ color: colors.subtext, textAlign: 'center', marginBottom: 25, fontSize: 14 }}>
@@ -1107,12 +1212,17 @@ const siguientePregunta = async () => {
                             ¡Nivel Completado!
                         </Text>
 
-                        <View style={{alignItems: 'center', marginVertical: 20}}>
-                            <Text style={{fontSize:16, color: colors.subtext}}>Experiencia obtenida</Text>
-                            <Text style={{fontSize:45, fontWeight:'bold', color: '#8b5cf6'}}>
-                                {/* Sumamos los 50 de la fase 3 + los 100 de pasarse el nivel */}
-                                +{xpGanadaFase + 100} XP 
-                            </Text>
+                        <View style={{flexDirection:'row', gap: 30, marginVertical: 20}}>
+                            <View style={{alignItems: 'center'}}>
+                                <Text style={{fontSize:14, color: colors.subtext}}>Experiencia</Text>
+                                <Text style={{fontSize:34, fontWeight:'bold', color: '#8b5cf6'}}>+{xpGanadaFase + 100}</Text>
+                                <Text style={{fontSize:12, color: colors.subtext}}>XP</Text>
+                            </View>
+                            <View style={{alignItems: 'center'}}>
+                                <Text style={{fontSize:14, color: colors.subtext}}>Rubíes</Text>
+                                <Text style={{fontSize:34, fontWeight:'bold', color: '#FF3B6B'}}>+{rubiesGanadosFase}</Text>
+                                <Text style={{fontSize:12, color: colors.subtext}}>💎</Text>
+                            </View>
                         </View>
 
                         <Text style={{ color: colors.success, fontWeight: 'bold', marginBottom: 25, fontSize: 14, textAlign: 'center' }}>

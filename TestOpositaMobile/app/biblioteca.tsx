@@ -7,7 +7,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { API_URL } from './config'; 
-import { useTheme } from '../context/ThemeContext'; 
+import { useTheme } from '../context/ThemeContext';
+import { useSafeBack } from '../hooks/useSafeBack';
 
 export default function BibliotecaScreen() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export default function BibliotecaScreen() {
   const [archivoPendiente, setArchivoPendiente] = useState<any>(null);
   const [catsSeleccionadas, setCatsSeleccionadas] = useState<string[]>(['Test Rapido', 'Modo Reto']);
 
-  const volver = () => router.back();
+  const volver = useSafeBack(cursoId ? { pathname: '/curso/[id]', params: { id: String(cursoId), nombre: String(cursoNombre) } } : '/(tabs)');
 
   const styles = StyleSheet.create({
     container: { flex: 1 },

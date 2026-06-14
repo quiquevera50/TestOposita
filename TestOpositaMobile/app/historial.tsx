@@ -9,10 +9,12 @@ import { Ionicons } from '@expo/vector-icons';
 // 👇 Importamos Config y Tema
 import { API_URL } from './config';
 import { useTheme } from '../context/ThemeContext';
+import { useSafeBack } from '../hooks/useSafeBack';
 
 export default function HistorialScreen() {
   const router = useRouter();
   const { colors, isDark } = useTheme(); // 👈 Activamos modo oscuro
+  const volver = useSafeBack('/(tabs)');
 
   const [historial, setHistorial] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -131,7 +133,7 @@ export default function HistorialScreen() {
       
       {/* Cabecera */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.btnAtras}>
+        <TouchableOpacity onPress={volver} style={styles.btnAtras}>
             <Ionicons name="arrow-back" size={28} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.titulo, { color: colors.text }]}>Historial 📜</Text>

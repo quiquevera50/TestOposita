@@ -6,8 +6,10 @@ import { API_URL } from './config';
 // Creamos una versión personalizada de axios
 const api = axios.create({
   baseURL: API_URL,
+  // Las llamadas de IA (generar test/resumen) pueden tardar bastante: damos margen amplio
+  timeout: 180000, // 3 minutos
   headers: {
-    // ESTA ES LA LÍNEA MÁGICA QUE SOLUCIONA EL ERROR 405 DE NGROK 
+    // ESTA ES LA LÍNEA MÁGICA QUE SOLUCIONA EL ERROR 405 DE NGROK
     'ngrok-skip-browser-warning': 'true'
   }
 });

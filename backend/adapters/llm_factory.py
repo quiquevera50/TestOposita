@@ -41,20 +41,23 @@ class AIFactory:
 
     @classmethod
     def _initialize_pool(cls):
-        """
-        Inicializa la pool de adaptadores de forma diferida (lazy loading)
-        para evitar problemas de importación circular.
-        """
         if not cls._adapters_pool:
-            # Importamos aquí para asegurar que los adaptadores se cargan correctamente
-            from adapters.gemini_adapter import GeminiAdapter
-            from adapters.groq_adapter import GroqAdapter
-            
-            cls._gemini = GeminiAdapter()
-            cls._groq = GroqAdapter()
-            
-            # De momento solo metemos a Gemini en la piscina
-            cls._adapters_pool = [cls._gemini ,cls._groq ]
+            adapters = []
+            try:
+                from adapters.gemini_adapter import GeminiAdapter
+                adapters.append(GeminiAdapter())
+            except Exception as e:
+                logging.warning(f"GeminiAdapter no disponible: {e}")
+            try:
+                from adapters.groq_adapter import GroqAdapter
+                adapters.append(GroqAdapter())
+            except Exception as e:
+                logging.warning(f"GroqAdapter no disponible: {e}")
+
+            if not adapters:
+                raise RuntimeError("No hay ningún adaptador de IA disponible")
+
+            cls._adapters_pool = adapters
             cls._round_robin_cycle = itertools.cycle(cls._adapters_pool)
 
     @classmethod

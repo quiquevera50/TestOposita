@@ -1,45 +1,43 @@
-// TestOpositaMobile/constants/theme.ts
 import { Platform } from 'react-native';
 
-const tintColorLight = '#007AFF';
-const tintColorDark = '#3B82F6';
+const green = '#58CC02';
+const greenDark = '#58CC02';
 
 export const Colors = {
   light: {
-    text: '#1f2937',        // Gris oscuro elegante
-    subtext: '#6b7280',     // Gris medio para subtítulos
-    background: '#f3f4f6',  // Fondo gris suave
-    card: '#ffffff',        // Tarjetas blancas
-    tint: tintColorLight,
-    border: '#e5e7eb',      // Bordes sutiles
-    icon: '#4b5563',
-    inputBg: '#ffffff',     // Fondo de inputs
-    success: '#10b981',     // Verde semáforo
-    error: '#ef4444',       // Rojo semáforo
-    
-    // Mantenemos estos dos para que no se rompa la barra de navegación (Tabs)
-    tabIconDefault: '#687076',
-    tabIconSelected: tintColorLight,
+    text: '#1C1C1E',
+    subtext: '#8E8E93',
+    background: '#F2F2F7',
+    card: '#FFFFFF',
+    tint: green,
+    border: '#E5E5EA',
+    icon: '#8E8E93',
+    inputBg: '#FFFFFF',
+    success: '#58CC02',
+    error: '#FF4B4B',
+    xp: '#CE82FF',
+    streak: '#FF9600',
+    tabIconDefault: '#8E8E93',
+    tabIconSelected: green,
   },
   dark: {
-    text: '#f9fafb',        // Blanco roto (menos agresivo)
-    subtext: '#9ca3af',
-    background: '#111827',  // "Gray 900" (Gris espacial profundo)
-    card: '#1f2937',        // "Gray 800" (Para diferenciar tarjetas del fondo)
-    tint: tintColorDark,
-    border: '#374151',      // Bordes oscuros
-    icon: '#9ca3af',
-    inputBg: '#374151',
-    success: '#34d399',     // Verde brillante para fondo oscuro
-    error: '#f87171',       // Rojo pastel para fondo oscuro
-    
-    // Mantenemos estos dos para los Tabs
-    tabIconDefault: '#9BA1A6',
-    tabIconSelected: tintColorDark,
+    text: '#F8FAFC',
+    subtext: '#8E8E93',
+    background: '#0F172A',
+    card: '#1E293B',
+    tint: greenDark,
+    border: '#334155',
+    icon: '#64748B',
+    inputBg: '#1E293B',
+    success: '#58CC02',
+    error: '#FF4B4B',
+    xp: '#CE82FF',
+    streak: '#FF9600',
+    tabIconDefault: '#64748B',
+    tabIconSelected: greenDark,
   },
 };
 
-// Mantenemos tu configuración original de fuentes tal cual estaba
 export const Fonts = Platform.select({
   ios: {
     sans: 'system-ui',

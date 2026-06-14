@@ -1,11 +1,13 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput, Alert, Platform, Animated} from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput, Alert, Platform, Animated, ActivityIndicator} from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as DocumentPicker from 'expo-document-picker';
 import api from '../api';
 import { useTheme } from '../../context/ThemeContext';
 import { NivelBar } from '../../components/NivelBar';
+import { EconomyBar } from '../../components/EconomyBar';
 import { useTaskManager } from '../../context/TaskManagerContext';
 import { useEnergy } from '../../context/EnergyContext';
 
@@ -23,6 +25,14 @@ export default function HomeScreen() {
   const [misCursos, setMisCursos] = useState<any[]>([]);
   const [showModalCurso, setShowModalCurso] = useState(false);
   const [nuevoCursoNombre, setNuevoCursoNombre] = useState('');
+  // Estados PDF Upload
+  const [showModalPDF, setShowModalPDF] = useState(false);
+  const [pdfStep, setPdfStep] = useState<'curso' | 'archivo' | 'loading'>('curso');
+  const [pdfCursoId, setPdfCursoId] = useState<number | null>(null);
+  const [pdfCursoNuevo, setPdfCursoNuevo] = useState('');
+  const [pdfArchivo, setPdfArchivo] = useState<any>(null);
+  const [pdfCantidad, setPdfCantidad] = useState(10);
+  const [pdfLoadingMsg, setPdfLoadingMsg] = useState('');
   const { novedades } = useTaskManager();
   const lockNav = useRef(false);
   const [modoEdicionCursos, setModoEdicionCursos] = useState(false);
@@ -264,163 +274,221 @@ export default function HomeScreen() {
     input: { borderWidth: 1, padding: 10, borderRadius: 10, fontSize: 16 },
   });
 
+ const CURSO_COLORS = ['#FF9600','#1CB0F6','#CE82FF','#FF4B4B','#58CC02','#FF86D0','#00CFC1'];
+
+  const abrirModalPDF = () => {
+    setPdfStep('curso');
+    setPdfCursoId(null);
+    setPdfCursoNuevo('');
+    setPdfArchivo(null);
+    setPdfCantidad(10);
+    setShowModalPDF(true);
+  };
+
+  const seleccionarPDF = async () => {
+    const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
+    if (!result.canceled && result.assets?.length > 0) {
+      setPdfArchivo(result.assets[0]);
+    }
+  };
+
+  const subirPDFyGenerar = async () => {
+    if (!pdfArchivo) return;
+    const token = await AsyncStorage.getItem('userToken');
+    setPdfStep('loading');
+
+    try {
+      // 1. Si nuevo curso, crearlo primero
+      let cursoId = pdfCursoId;
+      if (!cursoId) {
+        const userId = parseInt(await AsyncStorage.getItem('user_id') || '0');
+        const nombre = pdfCursoNuevo.trim() || pdfArchivo.name.replace('.pdf', '');
+        setPdfLoadingMsg('Creando curso...');
+        const resCurso = await api.post('/crear-curso', { user_id: userId, nombre });
+        cursoId = resCurso.data.id;
+        if (!cursoId) throw new Error('No se pudo crear el curso');
+      }
+
+      // 2. Subir PDF
+      setPdfLoadingMsg('Subiendo PDF...');
+      const formData = new FormData();
+      formData.append('curso_id', String(cursoId));
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(pdfArchivo.uri);
+        const blob = await response.blob();
+        formData.append('file', blob, pdfArchivo.name);
+      } else {
+        formData.append('file', { uri: pdfArchivo.uri, name: pdfArchivo.name, type: 'application/pdf' } as any);
+      }
+
+      const resSubida = await api.post('/subir-apunte', formData, {
+        headers: { 'Content-Type': 'multipart/form-data', 'Authorization': `Bearer ${token}` },
+      });
+      const apunteId = resSubida.data.apunte_id;
+      if (!apunteId) throw new Error('No se recibió apunte_id');
+
+      // 3. Generar test con Gemini
+      setPdfLoadingMsg(`Generando ${pdfCantidad} preguntas con IA...`);
+      const resTest = await api.post(`/generar-test-biblioteca/${apunteId}?cantidad=${pdfCantidad}`);
+      const preguntas = resTest.data.preguntas;
+      if (!preguntas?.length) throw new Error('La IA no generó preguntas');
+
+      setShowModalPDF(false);
+      await cargarTodo();
+      router.push({ pathname: '/test', params: { data: JSON.stringify(preguntas) } });
+
+    } catch (e: any) {
+      setShowModalPDF(false);
+      Alert.alert('Error', e?.response?.data?.detail || e?.message || 'Error generando el test');
+    }
+  };
+
  return (
         <View style={{flex: 1, backgroundColor: colors.background}}>
-        
-        {/* 👇 ANIMACIONES FLOTANTES (MAGIA VISUAL) 👇 */}
+
+        {/* ANIMACIONES FLOTANTES */}
         {animXP > 0 && (
             <Animated.View style={{ position: 'absolute', top: 120, alignSelf: 'center', zIndex: 1000, opacity: fadeAnim, transform: [{ translateY: floatY }] }}>
-                <Text style={{ fontSize: 32, fontWeight: 'bold', color: '#8b5cf6', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: {width: 1, height: 1}, textShadowRadius: 5 }}>
-                    +{animXP} XP
-                </Text>
+                <Text style={{ fontSize: 32, fontWeight: '800', color: '#CE82FF' }}>+{animXP} XP</Text>
             </Animated.View>
         )}
         {showAnimEnergia && (
             <Animated.View style={{ position: 'absolute', top: 70, right: 30, zIndex: 1000, opacity: fadeAnim, transform: [{ translateY: floatY }] }}>
-                <Text style={{ fontSize: 40, fontWeight: 'bold', color: '#f59e0b', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: {width: 1, height: 1}, textShadowRadius: 5 }}>
-                    +1 ⚡
-                </Text>
+                <Text style={{ fontSize: 40, fontWeight: '800', color: '#FF9600' }}>+1 ⚡</Text>
             </Animated.View>
         )}
-        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 100 }}>
-            
-            {/* CABECERA PERFIL + ENERGÍA + CUADERNO */}
-        <View style={styles.header}>
-            <View style={{flex: 1}}>
-                <Text style={[styles.greeting, { color: colors.text }]} numberOfLines={1}>
-                    Hola, {username} 👋
-                </Text>
-                <Text style={{color: colors.subtext}}>¿Qué estudiamos hoy?</Text>
-            </View>
-            
-            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
-                {/* 👇 LA PÍLDORA DE ENERGÍA 👇 */}
-                <TouchableOpacity 
-                    style={{
-                        flexDirection: 'row', alignItems: 'center', 
-                        backgroundColor: isDark ? '#334155' : '#eef2ff',
-                        paddingHorizontal: 12, paddingVertical: 8, 
-                        borderRadius: 20, borderWidth: 1, borderColor: colors.border
-                    }}
-                    onPress={() => Alert.alert("Energía ⚡", "Gastas 1 rayo por cada test o fase de reto. Se recarga 1 cada hora.\n\n¡Tienda Premium próximamente!")}
-                >
-                    <Text style={{fontSize: 20, marginRight: 5}}>⚡</Text>
-                    <View style={{alignItems: 'center'}}>
-                        <Text style={{fontWeight: 'bold', color: colors.text, fontSize: 14}}>
-                            {energia} / 5
+
+        <ScrollView contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
+
+            {/* ── BARRA DE ECONOMÍA ── */}
+            <EconomyBar
+                onPressRubies={() => router.push('/(tabs)/shop')}
+                onPressVidas={() => Alert.alert('Vidas ❤️', 'Pierdes una vida por cada fallo. Se recargan solas con el tiempo o cámbialas por rubíes 💎 en la tienda.')}
+            />
+
+            {/* ── HERO BANNER ── */}
+            <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 4 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 26, fontWeight: '800', color: colors.text, letterSpacing: -0.5 }} numberOfLines={1}>
+                            Hola, {username} 👋
                         </Text>
-                        {energia < 5 && (
-                            <Text style={{fontSize: 10, color: colors.tint, fontWeight: 'bold'}}>
-                                {formatTime(segundosRestantes)}
-                            </Text>
-                        )}
+                        <Text style={{ color: colors.subtext, fontSize: 14, marginTop: 2 }}>¿Qué estudiamos hoy?</Text>
                     </View>
-                </TouchableOpacity>
-
-                {/* BOTÓN DEL CUADERNO (Intacto) */}
-                <TouchableOpacity 
-                    style={{
-                        backgroundColor: isDark ? '#1e293b' : '#f1f5f9',
-                        padding: 12, borderRadius: 15, elevation: 2, borderWidth: 1, borderColor: colors.border
-                    }}
-                    onPress={() => {
-                        setShowMisiones(true);
-                        setCompletadasVistas(completadasActuales);
-                    }}
-                >
-                    <Ionicons name="journal" size={28} color={colors.tint} />
-                    {mostrarPuntoRojo && (
-                        <View style={{position:'absolute', top:-2, right:-2, width:12, height:12, backgroundColor:'#ef4444', borderRadius:6, borderWidth:2, borderColor: colors.background}} />
-                    )}
-                </TouchableOpacity>
+                    {/* Misiones */}
+                    <TouchableOpacity
+                        style={{ backgroundColor: isDark ? '#1E293B' : '#FFF', borderWidth: 1, borderColor: colors.border, borderRadius: 16, padding: 10, marginLeft: 10 }}
+                        onPress={() => { setShowMisiones(true); setCompletadasVistas(completadasActuales); }}
+                    >
+                        <Ionicons name="journal-outline" size={24} color={colors.tint} />
+                        {mostrarPuntoRojo && (
+                            <View style={{ position: 'absolute', top: -3, right: -3, width: 12, height: 12, backgroundColor: '#FF4B4B', borderRadius: 6, borderWidth: 2, borderColor: colors.background }} />
+                        )}
+                    </TouchableOpacity>
+                </View>
             </View>
-        </View>
 
-            {/* BARRA DE NIVEL */}
-            <NivelBar nivel={miNivel} xpActual={miXP} />
-
-            {/* TÍTULO CURSOS */}
-            <View style={{flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginTop: 20, marginBottom: 15}}>
-                <Text style={{fontSize: 20, fontWeight: 'bold', color: colors.text}}>Mis Cursos 📚</Text>
-                
-                <TouchableOpacity 
-                    style={{ padding: 5 }}
-                    onPress={() => setModoEdicionCursos(!modoEdicionCursos)} 
+            {/* ── STATS STRIP ── */}
+            <View style={{ flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 14, gap: 10 }}>
+                {/* Nivel */}
+                <View style={{ flex: 1, backgroundColor: isDark ? '#1E293B' : '#FFF', borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 22 }}>🏆</Text>
+                    <Text style={{ color: colors.tint, fontWeight: '800', fontSize: 18, marginTop: 2 }}>Nv. {miNivel}</Text>
+                    <Text style={{ color: colors.subtext, fontSize: 11, marginTop: 1 }}>{miXP} XP</Text>
+                </View>
+                {/* Misiones del día */}
+                <TouchableOpacity
+                    style={{ flex: 1, backgroundColor: isDark ? '#1E293B' : '#FFF', borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, alignItems: 'center' }}
+                    onPress={() => { setShowMisiones(true); setCompletadasVistas(completadasActuales); }}
                 >
-                    <Text style={{ color: modoEdicionCursos ? colors.error : colors.tint, fontWeight: 'bold', fontSize: 16 }}>
-                        {modoEdicionCursos ? 'OK' : 'Editar'}
+                    <Text style={{ fontSize: 22 }}>🎯</Text>
+                    <Text style={{ color: '#CE82FF', fontWeight: '800', fontSize: 18, marginTop: 2 }}>
+                        {Object.values(misiones).filter((m: any) => m.actual >= m.meta).length}/{Object.keys(misiones).length}
                     </Text>
+                    <Text style={{ color: colors.subtext, fontSize: 11, marginTop: 1 }}>Misiones</Text>
                 </TouchableOpacity>
             </View>
 
-           {/* LISTA DE CURSOS (GRID) */}
-            <View style={styles.grid}>
-                {misCursos.map((curso) => {
+            {/* ── BARRA DE NIVEL ── */}
+            <View style={{ paddingHorizontal: 20 }}>
+                <NivelBar nivel={miNivel} xpActual={miXP} />
+            </View>
+
+            {/* ── CABECERA CURSOS ── */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 }}>
+                <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text }}>Mis Cursos</Text>
+                <TouchableOpacity onPress={() => setModoEdicionCursos(!modoEdicionCursos)} style={{ backgroundColor: modoEdicionCursos ? '#FF4B4B' : colors.tint, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 }}>
+                    <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 13 }}>{modoEdicionCursos ? 'Listo' : 'Editar'}</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* ── GRID DE CURSOS ── */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 14, gap: 10 }}>
+                {misCursos.map((curso, idx) => {
                     const hayAviso = novedades[curso.id]?.test || novedades[curso.id]?.reto || novedades[curso.id]?.oficial;
-
+                    const cardColor = CURSO_COLORS[idx % CURSO_COLORS.length];
                     return (
-                        <TouchableOpacity 
+                        <TouchableOpacity
                             key={curso.id}
-                            style={[styles.cursoCard, { backgroundColor: colors.card, position: 'relative' }]}
-                            onPress={() => {
-                                // 🛡️ Si estamos editando O el candado está cerrado, no entramos al curso
-                                if (modoEdicionCursos || lockNav.current) return; 
-                                
-                                router.push({
-                                    pathname: "../curso/[id]",
-                                    params: { id: curso.id, nombre: curso.nombre }
-                                });
+                            style={{
+                                width: '47%', borderRadius: 20, overflow: 'hidden', position: 'relative',
+                                backgroundColor: cardColor, padding: 16, minHeight: 130,
                             }}
-                            activeOpacity={modoEdicionCursos ? 1 : 0.7}
+                            onPress={() => {
+                                if (modoEdicionCursos || lockNav.current) return;
+                                router.push({ pathname: '../curso/[id]', params: { id: curso.id, nombre: curso.nombre } });
+                            }}
+                            activeOpacity={modoEdicionCursos ? 1 : 0.85}
                         >
-                            <View style={[styles.iconBox, {backgroundColor: isDark ? '#333' : '#eef2ff'}]}>
-                                <Ionicons name={curso.icono || 'book'} size={32} color={colors.tint} />
+                            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.25)', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                                <Ionicons name={curso.icono || 'book'} size={26} color="white" />
                             </View>
-                            <Text style={[styles.cursoTitle, {color: colors.text}]} numberOfLines={2}>
-                                {curso.nombre}
-                            </Text>
-                            <Text style={{color: colors.subtext, fontSize: 12}}>
-                                {curso.total_apuntes || 0} temas
-                            </Text>
+                            <Text style={{ color: 'white', fontWeight: '800', fontSize: 15, marginBottom: 4 }} numberOfLines={2}>{curso.nombre}</Text>
+                            <Text style={{ color: 'rgba(255,255,255,0.75)', fontSize: 12 }}>{curso.total_apuntes || 0} temas</Text>
 
-                            {/* Aviso de Novedades (Solo si no estamos editando) */}
                             {hayAviso && !modoEdicionCursos && (
-                                <View style={{
-                                    position: 'absolute', top: 10, right: 10, width: 14, height: 14,
-                                    borderRadius: 7, backgroundColor: '#ef4444', borderWidth: 2,
-                                    borderColor: colors.card, zIndex: 10
-                                }} />
+                                <View style={{ position: 'absolute', top: 10, right: 10, width: 14, height: 14, borderRadius: 7, backgroundColor: '#FF4B4B', borderWidth: 2, borderColor: cardColor }} />
                             )}
-
-                            {/* Botón de Eliminar (Solo en Modo Edición) */}
                             {modoEdicionCursos && (
-                                <TouchableOpacity 
-                                    style={{
-                                        position: 'absolute', top: -8, right: -8, 
-                                        backgroundColor: '#ef4444', width: 32, height: 32, 
-                                        borderRadius: 16, justifyContent: 'center', alignItems: 'center',
-                                        zIndex: 20, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3
-                                    }}
+                                <TouchableOpacity
+                                    style={{ position: 'absolute', top: -6, right: -6, backgroundColor: '#FF4B4B', width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center', zIndex: 20 }}
                                     onPress={() => confirmarBorrarCurso(curso.id, curso.nombre)}
                                 >
-                                    <Ionicons name="trash" size={16} color="white" />
+                                    <Ionicons name="trash" size={14} color="white" />
                                 </TouchableOpacity>
                             )}
                         </TouchableOpacity>
                     );
                 })}
 
-                {/* Tarjeta Vacía para añadir (Se oculta al editar para no estorbar) */}
+                {/* Card añadir nuevo curso */}
                 {!modoEdicionCursos && (
-                    <TouchableOpacity 
-                        style={[styles.cursoCard, { backgroundColor: 'transparent', borderWidth: 2, borderColor: colors.border, borderStyle: 'dashed' }]}
+                    <TouchableOpacity
+                        style={{ width: '47%', borderRadius: 20, borderWidth: 2, borderColor: colors.border, borderStyle: 'dashed', minHeight: 130, justifyContent: 'center', alignItems: 'center', gap: 6 }}
                         onPress={() => setShowModalCurso(true)}
                     >
-                        <Ionicons name="add" size={40} color={colors.subtext} />
-                        <Text style={{color: colors.subtext, marginTop: 5}}>Nuevo Curso</Text>
+                        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.tint, justifyContent: 'center', alignItems: 'center' }}>
+                            <Ionicons name="add" size={28} color="white" />
+                        </View>
+                        <Text style={{ color: colors.subtext, fontSize: 13, fontWeight: '600' }}>Nuevo Curso</Text>
                     </TouchableOpacity>
                 )}
             </View>
+
+            {/* ── CTA SUBIR PDF ── */}
+            {!modoEdicionCursos && (
+                <View style={{ paddingHorizontal: 20, marginTop: 20 }}>
+                    <TouchableOpacity
+                        style={{ backgroundColor: colors.tint, borderRadius: 20, padding: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+                        onPress={abrirModalPDF}
+                    >
+                        <Ionicons name="cloud-upload-outline" size={22} color="white" />
+                        <Text style={{ color: 'white', fontWeight: '800', fontSize: 16 }}>Subir PDF y generar test</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
         </ScrollView>
 
         {/* ========================================================= */}
@@ -599,6 +667,117 @@ export default function HomeScreen() {
                 </View>
             </View>
         </Modal>
-    </View> 
+
+        {/* ========================================================= */}
+        {/* MODAL SUBIR PDF Y GENERAR TEST */}
+        {/* ========================================================= */}
+        <Modal visible={showModalPDF} transparent animationType="slide">
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }}>
+            <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, paddingBottom: 40 }}>
+
+              {/* LOADING */}
+              {pdfStep === 'loading' && (
+                <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+                  <ActivityIndicator size="large" color={colors.tint} />
+                  <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', marginTop: 20 }}>{pdfLoadingMsg}</Text>
+                  <Text style={{ color: colors.subtext, fontSize: 13, marginTop: 8 }}>Esto puede tardar unos segundos...</Text>
+                </View>
+              )}
+
+              {/* PASO 1: SELECCIONAR CURSO */}
+              {pdfStep === 'curso' && (
+                <>
+                  <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 6 }}>Subir PDF y generar test</Text>
+                  <Text style={{ color: colors.subtext, fontSize: 14, marginBottom: 20 }}>Elige un curso o crea uno nuevo</Text>
+
+                  {/* Cursos existentes */}
+                  {misCursos.length > 0 && (
+                    <ScrollView style={{ maxHeight: 180 }} showsVerticalScrollIndicator={false}>
+                      {misCursos.map((c, i) => (
+                        <TouchableOpacity key={c.id}
+                          style={{ flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 14, marginBottom: 8, backgroundColor: pdfCursoId === c.id ? colors.tint + '22' : (isDark ? '#1E293B' : '#F5F5F5'), borderWidth: 2, borderColor: pdfCursoId === c.id ? colors.tint : 'transparent' }}
+                          onPress={() => { setPdfCursoId(c.id); setPdfCursoNuevo(''); }}
+                        >
+                          <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: CURSO_COLORS[i % CURSO_COLORS.length], justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                            <Text style={{ color: 'white', fontWeight: '800', fontSize: 13 }}>{c.nombre?.[0]?.toUpperCase()}</Text>
+                          </View>
+                          <Text style={{ color: colors.text, fontWeight: '600', flex: 1 }}>{c.nombre}</Text>
+                          {pdfCursoId === c.id && <Ionicons name="checkmark-circle" size={22} color={colors.tint} />}
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  )}
+
+                  {/* Separador */}
+                  <Text style={{ color: colors.subtext, fontSize: 12, textAlign: 'center', marginVertical: 10 }}>— o crea uno nuevo —</Text>
+                  <TextInput
+                    style={{ borderWidth: 1, borderColor: pdfCursoNuevo ? colors.tint : colors.border, borderRadius: 14, padding: 14, color: colors.text, backgroundColor: isDark ? '#1E293B' : '#F5F5F5', fontSize: 15, marginBottom: 20 }}
+                    placeholder="Ej: Constitución Española"
+                    placeholderTextColor={colors.subtext}
+                    value={pdfCursoNuevo}
+                    onChangeText={t => { setPdfCursoNuevo(t); if (t) setPdfCursoId(null); }}
+                  />
+
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity style={{ flex: 1, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={() => setShowModalPDF(false)}>
+                      <Text style={{ color: colors.subtext, fontWeight: '600' }}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ flex: 2, padding: 16, borderRadius: 16, backgroundColor: (pdfCursoId || pdfCursoNuevo.trim()) ? colors.tint : colors.border, alignItems: 'center' }}
+                      onPress={() => (pdfCursoId || pdfCursoNuevo.trim()) && setPdfStep('archivo')}
+                    >
+                      <Text style={{ color: 'white', fontWeight: '800' }}>Siguiente →</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+
+              {/* PASO 2: SELECCIONAR PDF Y CANTIDAD */}
+              {pdfStep === 'archivo' && (
+                <>
+                  <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 6 }}>Selecciona el PDF</Text>
+                  <Text style={{ color: colors.subtext, fontSize: 14, marginBottom: 20 }}>La IA leerá el PDF y generará preguntas</Text>
+
+                  {/* Botón seleccionar PDF */}
+                  <TouchableOpacity
+                    style={{ borderWidth: 2, borderStyle: 'dashed', borderColor: pdfArchivo ? colors.tint : colors.border, borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 20 }}
+                    onPress={seleccionarPDF}
+                  >
+                    <Ionicons name={pdfArchivo ? 'document-text' : 'cloud-upload-outline'} size={36} color={pdfArchivo ? colors.tint : colors.subtext} />
+                    <Text style={{ color: pdfArchivo ? colors.tint : colors.subtext, fontWeight: '700', marginTop: 10, textAlign: 'center' }}>
+                      {pdfArchivo ? pdfArchivo.name : 'Pulsa para seleccionar PDF'}
+                    </Text>
+                    {pdfArchivo && <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 4 }}>{(pdfArchivo.size / 1024).toFixed(0)} KB</Text>}
+                  </TouchableOpacity>
+
+                  {/* Número de preguntas */}
+                  <Text style={{ color: colors.text, fontWeight: '700', marginBottom: 10 }}>¿Cuántas preguntas?</Text>
+                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 24 }}>
+                    {[10, 20, 30].map(n => (
+                      <TouchableOpacity key={n} style={{ flex: 1, padding: 14, borderRadius: 14, backgroundColor: pdfCantidad === n ? colors.tint : (isDark ? '#1E293B' : '#F5F5F5'), alignItems: 'center', borderWidth: 2, borderColor: pdfCantidad === n ? colors.tint : 'transparent' }} onPress={() => setPdfCantidad(n)}>
+                        <Text style={{ color: pdfCantidad === n ? 'white' : colors.text, fontWeight: '800', fontSize: 18 }}>{n}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity style={{ flex: 1, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={() => setPdfStep('curso')}>
+                      <Text style={{ color: colors.subtext, fontWeight: '600' }}>← Atrás</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ flex: 2, padding: 16, borderRadius: 16, backgroundColor: pdfArchivo ? colors.tint : colors.border, alignItems: 'center' }}
+                      onPress={() => pdfArchivo && subirPDFyGenerar()}
+                    >
+                      <Text style={{ color: 'white', fontWeight: '800' }}>Generar test ✨</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+
+            </View>
+          </View>
+        </Modal>
+
+    </View>
   );
 }

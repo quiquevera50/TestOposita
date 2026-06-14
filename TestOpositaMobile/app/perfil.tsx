@@ -8,9 +8,11 @@ import api from './api';
 import { API_URL } from './config'; 
 // 👇 1. Importamos el Hook del Tema
 import { useTheme } from '../context/ThemeContext';
+import { useSafeBack } from '../hooks/useSafeBack';
 
 export default function PerfilScreen() {
   const router = useRouter();
+  const volver = useSafeBack('/(tabs)');
   
   //  2. Extraemos los colores y la función para cambiar modo
   const { colors, toggleTheme, isDark } = useTheme();
@@ -105,7 +107,7 @@ export default function PerfilScreen() {
     <ScrollView contentContainerStyle={[styles.container, { backgroundColor: colors.background }]}>
       
       {/* Botón Atrás */}
-      <TouchableOpacity onPress={() => router.back()} style={styles.btnAtras}>
+      <TouchableOpacity onPress={volver} style={styles.btnAtras}>
         <Ionicons name="arrow-back" size={28} color={colors.text} />
       </TouchableOpacity>
 

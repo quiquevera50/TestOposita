@@ -8,8 +8,9 @@ import { API_URL } from './config';
 // 👇 1. Importamos el Hook
 import { useTheme } from '../context/ThemeContext';
 import { useGameFeedback } from '../hooks/useGameFeedback'; // Ajusta la ruta según donde lo creaste
-import { useTaskManager } from '../context/TaskManagerContext'; // 
+import { useTaskManager } from '../context/TaskManagerContext'; //
 import { useEnergy } from '../context/EnergyContext';
+import { useSafeBack } from '../hooks/useSafeBack';
 
 //  FUNCIÓN MAESTRA PARA EL CUADERNO DE MISIONES 
 export const registrarProgresoMisiones = async (tipo: 'test' | 'reto' | 'oficial', xpGanada: number) => {
@@ -77,6 +78,9 @@ export default function ExamenScreen() {
   const [carpetasTests, setCarpetasTests] = useState<any[]>([]);
   const [carpetaExpandida, setCarpetaExpandida] = useState<number | null>(null);
   const [testActivoId, setTestActivoId] = useState<number | null>(null);
+  // MODO FALLOS (banco de preguntas falladas)
+  const [modoFallos, setModoFallos] = useState(false);
+  const [fallosCount, setFallosCount] = useState(0);
 
   // ESTADOS PARA EL MODAL DE HISTORIAL
   const [modalHistorialVisible, setModalHistorialVisible] = useState(false);
@@ -105,6 +109,7 @@ export default function ExamenScreen() {
           try {
             const preguntasHome = JSON.parse(params.data as string);
             if (Array.isArray(preguntasHome) && preguntasHome.length > 0) {
+                setModoFallos(false);
                 iniciarExamenDirecto(preguntasHome);
                 router.setParams({ data: '' });
                 return; 
@@ -188,12 +193,32 @@ export default function ExamenScreen() {
           api.get(`/carpetas-tests/${cursoId}`)
              .then(res => setCarpetasTests(res.data))
              .catch(e => console.log("Error cargando carpetas", e));
+          // Contador del banco de fallos
+          api.get(`/fallos/${cursoId}`)
+             .then(res => setFallosCount(res.data.total))
+             .catch(() => {});
       }
   }, [userId, cursoId]);
 
   useEffect(() => {
       cargarCarpetas();
   }, [cargarCarpetas, estadoTarea?.data, modoConfiguracion]);
+
+  // Jugar el Modo Fallos: carga las preguntas falladas del banco
+  const jugarModoFallos = async () => {
+      if (!cursoId) return Alert.alert("Modo Fallos", "Disponible dentro de un curso.");
+      try {
+          const res = await api.get(`/fallos/${cursoId}`);
+          if (!res.data.total) {
+              return Alert.alert("¡Sin fallos! 🎉", "No tienes preguntas falladas pendientes. ¡Sigue así!");
+          }
+          setModoFallos(true);
+          setTestActivoId(null);
+          iniciarExamenDirecto(res.data.preguntas);
+      } catch {
+          Alert.alert("Error", "No se pudo cargar el Modo Fallos.");
+      }
+  };
   
   const generarTestDesdeTab = async () => {
     if (!apunteSeleccionado) return Alert.alert("Ojo", "Selecciona un apunte primero");
@@ -253,9 +278,27 @@ const siguiente = async () => {
         const totalXP = puntuacion * 10;
         setXpGanada(totalXP);
         setShowVictoria(true);
-        
-        // AQUÍ LE AVISAMOS AL CUADERNO 
+
+        // AQUÍ LE AVISAMOS AL CUADERNO
         await registrarProgresoMisiones('test', totalXP);
+
+        // === BANCO DE FALLOS ===
+        const esCorrecta = (q: any) => {
+            const c = q.Indice_correcta !== undefined ? q.Indice_correcta : q.respuesta_correcta;
+            return q.seleccion_usuario === c;
+        };
+        if (modoFallos) {
+            // En Modo Fallos: las acertadas salen del banco (dominadas)
+            examData.filter(esCorrecta).forEach(q => {
+                api.post('/superar-fallo', { curso_id: cursoId, pregunta: q }).catch(() => {});
+            });
+        } else {
+            // En test normal: las falladas entran al banco
+            const falladas = examData.filter(q => q.seleccion_usuario !== undefined && !esCorrecta(q));
+            if (falladas.length > 0) {
+                api.post('/registrar-fallos', { curso_id: cursoId, preguntas: falladas }).catch(() => {});
+            }
+        }
         
         if (userId) {
             // 1. Guardar historial: ¿Es un test guardado de la biblioteca o uno genérico?
@@ -296,6 +339,7 @@ const siguiente = async () => {
 
 // Para jugar un test que ya estaba guardado en la base de datos
   const jugarTestGuardado = (test: any) => {
+      setModoFallos(false);
       setTestActivoId(test.id);
       try {
           const preguntas = typeof test.contenido_json === 'string' 
@@ -335,7 +379,7 @@ const abandonarExamen = () => {
     }
 };
 // PARA VOLVER
-const volver = () => router.back();
+const volver = useSafeBack(cursoId ? { pathname: '/curso/[id]', params: { id: String(cursoId), nombre: cursoNombre } } : '/(tabs)');
 // Función que recicla la lógica de historial.tsx
 // Función que recicla la lógica de historial.tsx
 const abrirRevision = (intento: any) => {
@@ -388,13 +432,42 @@ const abrirRevision = (intento: any) => {
         <ScrollView contentContainerStyle={{ padding: 20 }}>
             
             {/* CAJA INFORMATIVA */}
-            <View style={{ backgroundColor: isDark ? '#1e293b' : '#fff7ed', padding: 20, borderRadius: 16, flexDirection: 'row', alignItems: 'center', marginBottom: 25 }}>
+            <View style={{ backgroundColor: isDark ? '#1e293b' : '#fff7ed', padding: 20, borderRadius: 16, flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
                 <Text style={{ fontSize: 30 }}>⚡</Text>
                 <View style={{ flex: 1, marginLeft: 15 }}>
-                    <Text style={{ color: colors.text, fontWeight: 'bold', fontSize: 15 }}>Tests Rápidos</Text>
+                    <Text style={{ color: colors.text, fontWeight: 'bold', fontSize: 15 }}>Test</Text>
                     <Text style={{ color: colors.subtext, fontSize: 12 }}>Genera simulacros y repásalos en tu biblioteca abajo.</Text>
                 </View>
             </View>
+
+            {/* TARJETA MODO FALLOS */}
+            <TouchableOpacity
+                onPress={jugarModoFallos}
+                disabled={fallosCount === 0}
+                activeOpacity={0.85}
+                style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 14,
+                    backgroundColor: fallosCount > 0 ? '#FF4B4B' : colors.card,
+                    borderRadius: 16, padding: 16, marginBottom: 25,
+                    borderWidth: 1, borderColor: fallosCount > 0 ? '#FF4B4B' : colors.border,
+                    borderBottomWidth: 4, borderBottomColor: fallosCount > 0 ? '#C53030' : (isDark ? '#0F172A' : '#E5E5EA'),
+                }}
+            >
+                <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: fallosCount > 0 ? 'rgba(255,255,255,0.2)' : (isDark ? '#334155' : '#F2F2F7'), justifyContent: 'center', alignItems: 'center' }}>
+                    <Ionicons name="flame" size={24} color={fallosCount > 0 ? '#FFF' : colors.subtext} />
+                </View>
+                <View style={{ flex: 1 }}>
+                    <Text style={{ color: fallosCount > 0 ? '#FFF' : colors.text, fontWeight: '800', fontSize: 16 }}>Modo Fallos</Text>
+                    <Text style={{ color: fallosCount > 0 ? 'rgba(255,255,255,0.85)' : colors.subtext, fontSize: 12 }}>
+                        {fallosCount > 0 ? `${fallosCount} preguntas por dominar` : 'Sin fallos pendientes ¡bien!'}
+                    </Text>
+                </View>
+                {fallosCount > 0 && (
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                        <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 16 }}>{fallosCount}</Text>
+                    </View>
+                )}
+            </TouchableOpacity>
 
            {/* ============================================== */}
             {/* SECCIÓN 1: GENERAR NUEVO TEST */}
@@ -431,17 +504,26 @@ const abrirRevision = (intento: any) => {
             {/* CONTROLES DE GENERACIÓN (Fijos debajo de la lista entera) */}
             {apunteSeleccionado && (
                 <View style={{ padding: 15, backgroundColor: isDark ? '#1e293b' : '#f8fafc', borderRadius: 12, marginBottom: 20, borderWidth: 1, borderColor: colors.border }}>
-                    <Text style={{ color: colors.text, fontWeight: 'bold', marginBottom: 10 }}>¿Cuántas preguntas?</Text>
+                    <Text style={{ color: colors.text, fontWeight: 'bold', marginBottom: 10 }}>Modo de test</Text>
                     <View style={styles.cantidadRow}>
-                        {[10, 15, 20, 30].map(num => (
-                            <TouchableOpacity 
-                                key={num} 
-                                style={[styles.btnCantidad, { backgroundColor: colors.card, borderColor: colors.border }, cantidadPreguntas === num && { backgroundColor: colors.tint, borderColor: colors.tint }]}
-                                onPress={() => setCantidadPreguntas(num)}
-                            >
-                                <Text style={[styles.txtCantidad, { color: colors.text }, cantidadPreguntas === num && {color:'white'}]}>{num}</Text>
-                            </TouchableOpacity>
-                        ))}
+                        {[
+                            { label: 'Rápido', sub: '10 preg.', num: 10 },
+                            { label: 'Bloque', sub: '20 preg.', num: 20 },
+                            { label: 'Medio', sub: '30 preg.', num: 30 },
+                            { label: 'Todo', sub: 'el PDF', num: 0 },
+                        ].map(modo => {
+                            const activo = cantidadPreguntas === modo.num;
+                            return (
+                                <TouchableOpacity
+                                    key={modo.num}
+                                    style={[{ flex: 1, marginHorizontal: 3, borderRadius: 14, borderWidth: 1, paddingVertical: 11, alignItems: 'center', backgroundColor: colors.card, borderColor: colors.border }, activo && { backgroundColor: colors.tint, borderColor: colors.tint }]}
+                                    onPress={() => setCantidadPreguntas(modo.num)}
+                                >
+                                    <Text style={[{ color: colors.text, fontWeight: '800', fontSize: 13 }, activo && { color: 'white' }]}>{modo.label}</Text>
+                                    <Text style={[{ color: colors.subtext, fontSize: 10, marginTop: 1 }, activo && { color: 'rgba(255,255,255,0.85)' }]}>{modo.sub}</Text>
+                                </TouchableOpacity>
+                            );
+                        })}
                     </View>
 
                     {estadoTarea?.loading ? (

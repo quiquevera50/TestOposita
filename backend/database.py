@@ -25,12 +25,16 @@ def init_db():
         id SERIAL PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
+        email TEXT,
         avatar TEXT DEFAULT NULL,
-        xp INTEGER DEFAULT 0,      
+        xp INTEGER DEFAULT 0,
         nivel INTEGER DEFAULT 1,
-        energia INTEGER DEFAULT 5,   
+        energia INTEGER DEFAULT 5,
         ultima_recarga TEXT,
-        fases_superadas_reto INTEGER DEFAULT 0
+        fases_superadas_reto INTEGER DEFAULT 0,
+        rubies INTEGER DEFAULT 100,
+        racha_dias INTEGER DEFAULT 0,
+        ultima_actividad DATE
     )''')
     
     # 2. CURSOS
@@ -91,6 +95,7 @@ def init_db():
         numero_nivel INTEGER NOT NULL,
         contenido_json TEXT,
         desbloqueado BOOLEAN DEFAULT FALSE,
+        estrellas INTEGER DEFAULT 0,
         FOREIGN KEY(reto_id) REFERENCES retos(id) ON DELETE CASCADE
     )''')
     
@@ -163,6 +168,30 @@ def init_db():
         fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY(reto_id) REFERENCES retos(id) ON DELETE CASCADE
+    )''')
+
+    # 13. RESÚMENES IA (caché: se genera una vez por apunte+modo)
+    c.execute('''CREATE TABLE IF NOT EXISTS resumenes (
+        id SERIAL PRIMARY KEY,
+        apunte_id INTEGER NOT NULL,
+        modo TEXT NOT NULL,
+        contenido TEXT,
+        fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(apunte_id, modo),
+        FOREIGN KEY(apunte_id) REFERENCES apuntes(id) ON DELETE CASCADE
+    )''')
+
+    # 14. BANCO DE FALLOS (preguntas falladas para reentrenar)
+    c.execute('''CREATE TABLE IF NOT EXISTS fallos (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        curso_id INTEGER,
+        pregunta_json TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        veces_fallada INTEGER DEFAULT 1,
+        fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, curso_id, hash),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )''')
     conn.commit()
     c.close()

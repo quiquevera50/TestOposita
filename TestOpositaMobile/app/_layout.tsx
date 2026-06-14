@@ -5,7 +5,9 @@ import { StatusBar } from 'expo-status-bar';
 import { TaskManagerProvider } from '../context/TaskManagerContext';
 import GlobalNotification from '../components/GlobalNotification'; 
 // 👇 1. IMPORTAMOS EL PROVEEDOR DE ENERGÍA
-import { EnergyProvider } from '../context/EnergyContext'; 
+import { EnergyProvider } from '../context/EnergyContext';
+// 💎 PROVEEDOR DE ECONOMÍA UNIFICADA (vidas, rubíes, racha, estrellas)
+import { EconomyProvider } from '../context/EconomyContext';
 
 // Componente auxiliar para usar el hook dentro del Provider
 function RootNavigator() {
@@ -32,6 +34,8 @@ export default function RootLayout() {
     <ThemeProvider>
        {/* 👇 2. ENVUELVE TODO EL MOTOR CON EL ENERGY PROVIDER 👇 */}
        <EnergyProvider>
+         {/* 💎 Economía unificada disponible en toda la app */}
+         <EconomyProvider>
            <TaskManagerProvider>
             <GlobalNotification />
               <Stack screenOptions={{ headerShown: false }}>
@@ -40,6 +44,7 @@ export default function RootLayout() {
                 {/* ... resto de screens ... */}
               </Stack>
            </TaskManagerProvider>
+         </EconomyProvider>
        </EnergyProvider>
     </ThemeProvider>
   );

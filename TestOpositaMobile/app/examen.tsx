@@ -10,6 +10,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useTaskManager } from '../context/TaskManagerContext';
 import { useGameFeedback } from '../hooks/useGameFeedback';
 import { useEnergy } from '../context/EnergyContext';
+import { useSafeBack } from '../hooks/useSafeBack';
 
 //  FUNCIÓN MAESTRA PARA EL CUADERNO DE MISIONES 
 export const registrarProgresoMisiones = async (tipo: 'test' | 'reto' | 'oficial', xpGanada: number) => {
@@ -46,6 +47,7 @@ export default function OficialScreen() {
 
     const cursoId = params.cursoId ? parseInt(params.cursoId as string) : null;
     const cursoNombre = params.cursoNombre as string || "Mis Apuntes";
+    const volver = useSafeBack(cursoId ? { pathname: '/curso/[id]', params: { id: String(cursoId), nombre: cursoNombre } } : '/(tabs)');
     const taskKey = cursoId ? cursoId.toString() : 'general';
     const estadoTarea = tareasOficial?.[taskKey];
 
@@ -335,7 +337,7 @@ export default function OficialScreen() {
             <View style={{ flex: 1, backgroundColor: colors.background }}>
                 {/* CABECERA OFICIAL */}
                 <View style={[styles.header, { backgroundColor: colors.card }]}>
-                    <TouchableOpacity onPress={() => router.back()} style={{padding: 5}}>
+                    <TouchableOpacity onPress={volver} style={{padding: 5}}>
                         <Ionicons name="arrow-back" size={24} color={colors.text} />
                     </TouchableOpacity>
                     

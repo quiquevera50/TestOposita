@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, FlatList, SafeAreaView, TextInput, KeyboardAvoidingView, Platform, Animated} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, FlatList, SafeAreaView, TextInput, KeyboardAvoidingView, Platform, Animated, Easing} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import api from './api';
@@ -12,6 +12,45 @@ import { useTaskManager } from '../context/TaskManagerContext';
 import { useEnergy } from '../context/EnergyContext';
 import { useEconomy } from '../context/EconomyContext';
 import { useSafeBack } from '../hooks/useSafeBack';
+import { Confetti } from '../components/Confetti';
+
+// 🃏 Opción que se desintegra al eliminarla con el comodín 50/50
+function OpcionAnimada({ op, eliminada, disabled, onPress, contStyle, textStyle }: any) {
+  const anim = React.useRef(new Animated.Value(1)).current;
+  React.useEffect(() => {
+    if (eliminada) {
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 1.05, duration: 90, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0, duration: 420, easing: Easing.in(Easing.back(1.6)), useNativeDriver: true }),
+      ]).start();
+    } else {
+      anim.setValue(1);
+    }
+  }, [eliminada]);
+  const opacity = eliminada ? anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) : 1;
+  return (
+    <Animated.View style={{ transform: [{ scale: eliminada ? anim : 1 }], opacity }}>
+      <TouchableOpacity disabled={disabled} onPress={onPress} style={contStyle}>
+        <Text style={textStyle}>{op}</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+// ⭐ Estrella que aparece con rebote (para la pantalla de victoria)
+function EstrellaPop({ activa, delay }: { activa: boolean; delay: number }) {
+  const scale = React.useRef(new Animated.Value(activa ? 0 : 1)).current;
+  React.useEffect(() => {
+    if (activa) {
+      Animated.spring(scale, { toValue: 1, delay, friction: 4, tension: 120, useNativeDriver: true }).start();
+    }
+  }, [activa]);
+  return (
+    <Animated.View style={{ transform: [{ scale: activa ? scale : 1 }] }}>
+      <Ionicons name="star" size={44} color={activa ? '#FFC800' : '#3a3a3a'} />
+    </Animated.View>
+  );
+}
 //  FUNCIÓN MAESTRA PARA EL CUADERNO DE MISIONES 
 export const registrarProgresoMisiones = async (tipo: 'test' | 'reto' | 'oficial', xpGanada: number) => {
     try {
@@ -76,7 +115,7 @@ export default function EntrenarScreen() {
   const [showVictoria, setShowVictoria] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
   const { feedbackAcierto, feedbackError, feedbackSeleccion, feedbackComodin, feedbackVictoria } = useGameFeedback();
-  const { ganarRubies } = useEconomy();
+  const { ganarRubies, guardarEstrellas } = useEconomy();
   //  NUEVOS ESTADOS PARA EL MODO REPASO
   const [preguntasFalladas, setPreguntasFalladas] = useState<any[]>([]); // La bolsa de errores
   const [listaRepaso, setListaRepaso] = useState<any[]>([]); // La ronda de repaso activa
@@ -88,6 +127,10 @@ export default function EntrenarScreen() {
   const [opcionesEliminadas, setOpcionesEliminadas] = useState<number[]>([]); // Opciones quitadas por comodín
   const [showComodinGanado, setShowComodinGanado] = useState(false);
   const [rubiesGanadosFase, setRubiesGanadosFase] = useState(0);
+  // ⭐ ESTRELLAS POR NIVEL
+  const [estrellasNivel, setEstrellasNivel] = useState<Record<string, number>>({}); // {numero_nivel: estrellas}
+  const [estrellasGanadas, setEstrellasGanadas] = useState(0); // Estrellas del nivel recién completado
+  const fallosNivelRef = React.useRef(0); // Fallos acumulados en el nivel en curso
     // 🌟 ANIMACIÓN DE LATIDO PARA EL MAPA
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
   
@@ -213,10 +256,15 @@ const cargarUsuarioYRetos = async () => {
   const volver = useSafeBack(cursoId ? { pathname: '/curso/[id]', params: { id: String(cursoId), nombre: cursoNombre } } : '/(tabs)');
   
   // ENTRAR EN RETO
-  const abrirMapaReto = (reto: any) => {
+  const abrirMapaReto = async (reto: any) => {
       // ✅ CORRECCIÓN: Guardamos el objeto entero (con nivel_actual, completado, etc.)
-      setRetoActual(reto); 
+      setRetoActual(reto);
       setVista('mapa');
+      // Cargar estrellas guardadas de cada nivel
+      try {
+          const res = await api.get(`/estrellas-reto/${reto.id}`);
+          setEstrellasNivel(res.data || {});
+      } catch { setEstrellasNivel({}); }
   };
 
   
@@ -282,10 +330,14 @@ const cargarUsuarioYRetos = async () => {
       setListaRepaso([]);
       setModoRepaso(false);
 
-      // Reinicio de mecánicas de juego
-      setRachaJuego(0);
-      setComodines(0);
       setRubiesGanadosFase(0);
+      // Racha, comodines y contador de fallos SOLO se reinician al empezar el nivel (fase 1).
+      // Así los comodines ganados se conservan entre fases y son útiles.
+      if (numFase === 1) {
+          setRachaJuego(0);
+          setComodines(0);
+          fallosNivelRef.current = 0;
+      }
 
       resetEstadoPregunta();
       setVista('juego');
@@ -361,6 +413,7 @@ const cargarUsuarioYRetos = async () => {
       } else {
           feedbackError();
           setRachaJuego(0); // Se rompe la racha
+          fallosNivelRef.current += 1; // Para el cálculo de estrellas del nivel
           //  ¡Al saco de errores para luego
           setPreguntasFalladas(prev => [...prev, preg]);
       }
@@ -409,11 +462,23 @@ const cargarUsuarioYRetos = async () => {
           setPuntuacionFase(p => p + 1);
           setEsCorrectaAbierta(true);
           feedbackAcierto();
+          setRachaJuego(prev => {
+              const nueva = prev + 1;
+              if (nueva > 0 && nueva % 5 === 0) {
+                  setComodines(c => c + 1);
+                  setShowComodinGanado(true);
+                  feedbackComodin();
+                  setTimeout(() => setShowComodinGanado(false), 1800);
+              }
+              return nueva;
+          });
       } else {
           setEsCorrectaAbierta(false);
           feedbackError();
+          setRachaJuego(0);
+          fallosNivelRef.current += 1;
           // 👇 ¡Al saco de errores para luego!
-          setPreguntasFalladas(prev => [...prev, preg]); 
+          setPreguntasFalladas(prev => [...prev, preg]);
       }
   };
 
@@ -461,6 +526,18 @@ const siguientePregunta = async () => {
                 if (faseActual === 3 && retoActual.nivelJugado === retoActual.nivel_actual) rubies += 20;
                 setRubiesGanadosFase(rubies);
                 ganarRubies(rubies);
+
+                // ⭐ ESTRELLAS DEL NIVEL (al completar la fase 3)
+                if (faseActual === 3) {
+                    const f = fallosNivelRef.current;
+                    const estrellas = f <= 1 ? 3 : f <= 4 ? 2 : 1;
+                    setEstrellasGanadas(estrellas);
+                    const nivIdx = retoActual.nivelJugado;
+                    setEstrellasNivel(prev => ({ ...prev, [String(nivIdx)]: Math.max(prev[String(nivIdx)] || 0, estrellas) }));
+                    guardarEstrellas(retoActual.id, nivIdx, estrellas);
+                } else {
+                    setEstrellasGanadas(0);
+                }
             } catch (e) {
                 console.log("Error servidor");
             } finally {
@@ -771,6 +848,15 @@ const siguientePregunta = async () => {
                                   alignItems: 'center'
                               }}>
                                   
+                                  {/* ⭐ Estrellas ganadas (encima del nodo completado) */}
+                                  {completado && (
+                                      <View style={{ flexDirection: 'row', position: 'absolute', top: -16, zIndex: 5, gap: 2, backgroundColor: isDark ? '#1e293b' : 'white', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 12, borderWidth: 1, borderColor: colors.border }}>
+                                          {[1, 2, 3].map(s => (
+                                              <Ionicons key={s} name="star" size={13} color={(estrellasNivel[String(index)] || 0) >= s ? '#FFC800' : (isDark ? '#334155' : '#e5e7eb')} />
+                                          ))}
+                                      </View>
+                                  )}
+
                                   {/* El Botón */}
                                   <TouchableOpacity
                                       style={{
@@ -787,7 +873,7 @@ const siguientePregunta = async () => {
                                       activeOpacity={0.8}
                                   >
                                       {completado ? (
-                                          <Ionicons name="star" size={35} color="#FFD700" />
+                                          <Ionicons name="checkmark" size={38} color="white" />
                                       ) : esElActual ? (
                                           <Ionicons name="play" size={35} color="white" style={{marginLeft: 5}} />
                                       ) : (
@@ -1077,27 +1163,24 @@ const siguientePregunta = async () => {
                           const eliminada = opcionesEliminadas.includes(idx);
 
                           return (
-                              <TouchableOpacity
+                              <OpcionAnimada
                                   key={idx}
-                                  style={[
+                                  op={op}
+                                  eliminada={eliminada}
+                                  disabled={mostrarExplicacion || eliminada}
+                                  onPress={() => responderTest(idx)}
+                                  contStyle={[
                                       styles.opcionBtn,
-                                      { backgroundColor, borderColor }, // Aplicamos colores calculados
+                                      { backgroundColor, borderColor },
                                       esVF && styles.btnVF,
                                       esHuecos && styles.btnHueco,
-                                      eliminada && { opacity: 0.25, borderStyle: 'dashed' }
                                   ]}
-                                  onPress={() => responderTest(idx)}
-                                  disabled={mostrarExplicacion || eliminada}
-                              >
-                                  <Text style={[
+                                  textStyle={[
                                       styles.textoOpcion,
-                                      { color: textColor }, // Aplicamos color de texto
-                                      esVF && {fontWeight: 'bold', fontSize: 18},
-                                      eliminada && { textDecorationLine: 'line-through', color: colors.subtext }
-                                  ]}>
-                                      {op}
-                                  </Text>
-                              </TouchableOpacity>
+                                      { color: textColor },
+                                      esVF && { fontWeight: 'bold', fontSize: 18 },
+                                  ]}
+                              />
                           );
                       })}
                   </View>
@@ -1216,11 +1299,19 @@ const siguientePregunta = async () => {
            {/* 👇 3. MODAL DE VICTORIA (SOLO XP + BONO) 👇 */}
             <Modal visible={showVictoria} transparent animationType="fade">
                 <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' }}>
+                    {showVictoria && <Confetti count={50} />}
                     <View style={{ backgroundColor: colors.card, width: '85%', padding: 30, borderRadius: 25, alignItems: 'center', borderWidth: 1, borderColor: colors.border, elevation: 10 }}>
-                        <Ionicons name="trophy" size={80} color="#FFD700" style={{ marginBottom: 10 }} />
-                        <Text style={{ fontSize: 26, fontWeight: 'bold', color: colors.text, textAlign: 'center', marginBottom: 15 }}>
+                        <Ionicons name="trophy" size={70} color="#FFD700" style={{ marginBottom: 6 }} />
+                        <Text style={{ fontSize: 24, fontWeight: 'bold', color: colors.text, textAlign: 'center', marginBottom: 12 }}>
                             ¡Nivel Completado!
                         </Text>
+
+                        {/* ⭐ ESTRELLAS GANADAS (animadas con rebote) */}
+                        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+                            {[1, 2, 3].map(s => (
+                                <EstrellaPop key={s} activa={estrellasGanadas >= s} delay={s * 250} />
+                            ))}
+                        </View>
 
                         <View style={{flexDirection:'row', gap: 30, marginVertical: 20}}>
                             <View style={{alignItems: 'center'}}>

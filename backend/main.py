@@ -511,6 +511,22 @@ def gastar_rubies(cantidad: int, user_id: int = Depends(verificar_token)):
         conn.close()
 
 
+@app.get("/estrellas-reto/{reto_id}")
+def estrellas_reto(reto_id: int, user_id: int = Depends(verificar_token)):
+    """Devuelve {numero_nivel: estrellas} de un reto, para pintar el mapa."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT n.numero_nivel, n.estrellas FROM niveles n
+            JOIN retos r ON n.reto_id = r.id
+            WHERE n.reto_id = %s AND r.user_id = %s
+        """, (reto_id, user_id))
+        return {str(row['numero_nivel']): (row['estrellas'] or 0) for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+
 @app.post("/guardar-estrellas/{reto_id}/{numero_nivel}/{estrellas}")
 def guardar_estrellas(reto_id: int, numero_nivel: int, estrellas: int, user_id: int = Depends(verificar_token)):
     """Guarda las estrellas de un nivel (solo si mejora el récord anterior)."""

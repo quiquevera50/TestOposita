@@ -869,11 +869,22 @@ const abrirRevision = (intento: any) => {
                         const colorPrec = prec >= 70 ? '#58CC02' : prec >= 50 ? '#FF9600' : '#FF4B4B';
                         return (
                           <>
-                            <Text style={{ fontSize: 56 }}>{aprobado ? '🏆' : '📚'}</Text>
+                            <Text style={{ fontSize: 56 }}>{modoFallos ? '🔥' : (aprobado ? '🏆' : '📚')}</Text>
                             <Text style={{ fontSize: 24, fontWeight: '800', color: colors.text, textAlign: 'center', marginTop: 4 }}>
-                                ¡Test Finalizado!
+                                {modoFallos ? '¡Repaso de fallos!' : '¡Test Finalizado!'}
                             </Text>
                             <Text style={{ fontSize: 15, color: colorPrec, fontWeight: '700', marginTop: 4, marginBottom: 18 }}>{msg}</Text>
+
+                            {modoFallos && (
+                                <View style={{ backgroundColor: '#FF4B4B22', borderRadius: 14, paddingVertical: 10, paddingHorizontal: 16, marginBottom: 16, alignItems: 'center' }}>
+                                    <Text style={{ color: '#FF4B4B', fontWeight: '800', fontSize: 15 }}>
+                                        Dominaste {puntuacion} de {examData.length} fallos 🎯
+                                    </Text>
+                                    <Text style={{ color: colors.subtext, fontSize: 12, marginTop: 2 }}>
+                                        {fallos > 0 ? `Quedan ${fallos} por repasar — ¡no te rindas!` : '¡Banco de fallos limpio! Crack 🏅'}
+                                    </Text>
+                                </View>
+                            )}
 
                             {/* Anillo de precisión */}
                             <View style={{ width: 110, height: 110, borderRadius: 55, borderWidth: 10, borderColor: colorPrec, justifyContent: 'center', alignItems: 'center', marginBottom: 18 }}>

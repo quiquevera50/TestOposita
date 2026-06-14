@@ -1,760 +1,400 @@
-import React, { useState, useCallback, useRef, useEffect} from 'react';
-// 👇 Importaciones corregidas para evitar errores de Modal y FlatList
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, SafeAreaView, Modal, FlatList, Platform} from 'react-native';
-import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Platform } from 'react-native';
+import { useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from './api';
-import { Ionicons } from '@expo/vector-icons';
-import { API_URL } from './config';
 import { useTheme } from '../context/ThemeContext';
-import { useTaskManager } from '../context/TaskManagerContext';
+import { useEconomy } from '../context/EconomyContext';
 import { useGameFeedback } from '../hooks/useGameFeedback';
-import { useEnergy } from '../context/EnergyContext';
 import { useSafeBack } from '../hooks/useSafeBack';
+import { registrarProgresoMisiones } from './test';
 
-//  FUNCIÓN MAESTRA PARA EL CUADERNO DE MISIONES 
-export const registrarProgresoMisiones = async (tipo: 'test' | 'reto' | 'oficial', xpGanada: number) => {
-    try {
-        const hoy = new Date().toISOString().split('T')[0];
-        const key = `@misiones_${hoy}`;
-        const misionesStr = await AsyncStorage.getItem(key);
-        
-        
-        let misiones = {
-            test: { actual: 0, meta: 1, xp: 20, titulo: "Haz un test rápido" },
-            reto: { actual: 0, meta: 1, xp: 20, titulo: "Haz una fase en Modo Reto" }, // 👈 NUEVO
-            oficial: { actual: 0, meta: 1, xp: 20, titulo: "Haz un Examen Oficial" }, // 👈 NUEVO
-            xp: { actual: 0, meta: 200, xp: 50, titulo: "Gana 200 de Experiencia" } // 👈 NUEVO
-        };
+// ==========================================
+// 📝 EXAMEN OFICIAL — Simulacro mixto cronometrado
+// Mezcla preguntas del temario (PDF) + tus fallos. Penalización 4 fallos = -1 acierto.
+// ==========================================
 
-        if (misionesStr) misiones = JSON.parse(misionesStr);
+const correctaDe = (q: any) => (q.Indice_correcta !== undefined ? q.Indice_correcta : q.respuesta_correcta);
+const enunciadoDe = (q: any) => q.Pregunta || q.pregunta || '';
+const opcionesDe = (q: any) => q.Opciones || q.opciones || [];
 
-        // Sumamos +1 a la misión del modo al que acabamos de jugar
-        if (tipo && misiones[tipo]) misiones[tipo].actual += 1;
-        // Sumamos la XP ganada a la barra general de progreso de XP
-        if (xpGanada > 0) misiones.xp.actual += xpGanada;
-
-        await AsyncStorage.setItem(key, JSON.stringify(misiones));
-    } catch (e) {
-        console.log("Error guardando misión", e);
-    }
-};
-export default function OficialScreen() {
-    const router = useRouter();
-    const params = useLocalSearchParams();
-    const { colors, isDark } = useTheme();
-    const { tareasOficial, analizarExamenBackground, marcarLeido } = useTaskManager();
-
-    const cursoId = params.cursoId ? parseInt(params.cursoId as string) : null;
-    const cursoNombre = params.cursoNombre as string || "Mis Apuntes";
-    const volver = useSafeBack(cursoId ? { pathname: '/curso/[id]', params: { id: String(cursoId), nombre: cursoNombre } } : '/(tabs)');
-    const taskKey = cursoId ? cursoId.toString() : 'general';
-    const estadoTarea = tareasOficial?.[taskKey];
-
-    // --- ESTADOS NAVEGACIÓN ---
-    const [vista, setVista] = useState<'lista' | 'juego'>('lista');
-    const [userId, setUserId] = useState<string | null>(null);
-
-    // --- ESTADOS VISTA LISTA ---
-    const [apuntesPorAnalizar, setApuntesPorAnalizar] = useState<any[]>([]); // 👈 Nueva lista 1
-    const [apuntesListos, setApuntesListos] = useState<any[]>([]);           // 👈 Nueva lista 2
-    const [misApuntes, setMisApuntes] = useState<any[]>([]);
-    const [historialOficial, setHistorialOficial] = useState<any[]>([]); 
-    const [seleccionado, setSeleccionado] = useState<number | null>(null);
-    const [loadingLista, setLoadingLista] = useState(false);
-
-    // --- ESTADOS VISTA JUEGO ---
-    const [sesionId, setSesionId] = useState<number | null>(null);
-    const [nombreExamen, setNombreExamen] = useState("");
-    const [preguntas, setPreguntas] = useState<any[]>([]);
-    const [indice, setIndice] = useState(0);
-    const [respuestas, setRespuestas] = useState<Record<number, number>>({});
-    const [showPanel, setShowPanel] = useState(false);  
-    const [procesandoIA, setProcesandoIA] = useState(false);
-    const { feedbackAcierto, feedbackSeleccion } = useGameFeedback();
-    const prevLoadingRef = useRef(false);
-    const { energia, consumirEnergia } = useEnergy();
-    // --- ESTADOS RESULTADOS FINALES ---
-    const [showVictoria, setShowVictoria] = useState(false);
-    const [showLevelUp, setShowLevelUp] = useState(false);
-    const [datosVictoria, setDatosVictoria] = useState({ aciertos: 0, total: 0, xp: 0 });
-    const [subidaPendiente, setSubidaPendiente] = useState<{si: boolean, nivel: number | null}>({si: false, nivel: null});
-
-    // 1. CARGA INICIAL
-    useFocusEffect(
-        useCallback(() => {
-            if (cursoId) {
-                marcarLeido(cursoId, 'oficial');
-                cargarDatosIniciales();
-            }
-        }, [cursoId])
-    );
-    useEffect(() => {
-        const isCurrentlyLoading = estadoTarea?.loading || false;
-
-        // Si ANTES estaba cargando, y AHORA ya no está cargando -> ¡La IA terminó!
-        if (prevLoadingRef.current === true && isCurrentlyLoading === false) {
-            console.log("✅ IA terminó en segundo plano. Autorecargando lista...");
-            cargarDatosIniciales();
-        }
-
-        // Actualizamos nuestra memoria para el próximo cambio
-        prevLoadingRef.current = isCurrentlyLoading;
-    }, [estadoTarea?.loading]);
-    
-    const cargarDatosIniciales = async () => {
-        setLoadingLista(true);
-        const uId = await AsyncStorage.getItem('user_id');
-        setUserId(uId);
-        try {
-            // 1. Cargar PDFs de la base de datos
-            const url = cursoId ? `/apuntes-curso/${cursoId}` : `/apuntes`;
-            const resApuntes = await api.get(url);
-            
-            const filtrados = resApuntes.data.filter((a: any) => a.categorias && a.categorias.includes('Examen Oficial'));
-            
-            // 2. Preguntar a Python por el estado de TODOS los PDFs (limpio)
-            const statusPromises = filtrados.map((a: any) => api.get(`/estado-examen-oficial/${a.id}`));
-            const statuses = await Promise.all(statusPromises);
-
-            const porAnalizar: any[] = [];
-            const listos: any[] = [];
-
-            // 3. Separarlos en listas y purgar los fallidos
-            for (let i = 0; i < filtrados.length; i++) {
-                const apunte = filtrados[i];
-                const check = statuses[i].data;
-
-                if (check.listo && check.exito !== false) {
-                    listos.push(apunte); // ✅ APTO y analizado con éxito
-                } else if (check.listo === true && check.exito === false) {
-                    // ❌ FALLIDO (NO APTO): Le quitamos la etiqueta en el servidor 
-                    api.post(`/quitar-categoria/${apunte.id}`, { categoria: 'Examen Oficial' })
-                       .catch(e => console.log("Error purgando categoría", e));
-                    
-                    // Al NO meterlo en 'porAnalizar', el PDF desaparece de la pantalla inmediatamente.
-                } else {
-                    porAnalizar.push(apunte); // ⏳ Aún no analizado o está cargando ahora mismo
-                }
-            }
-
-            setApuntesPorAnalizar(porAnalizar);
-            setApuntesListos(listos);
-
-            // 4. Cargar Historial Oficial
-            if (uId) {
-                const resHistorial = await api.get(`/historial-oficial`);
-                setHistorialOficial(resHistorial.data);
-            }
-        } catch (e) {
-            console.log("Error cargando datos");
-        } finally {
-            setLoadingLista(false);
-        }
-    };
-
-    
-
-    const cargarJuegoDirecto = async (apunteId: number) => {
-        setLoadingLista(true);
-        try {
-            const resSesion = await api.get(`/iniciar-sesion-oficial/${apunteId}`);
-            setSesionId(resSesion.data.sesionId);
-            setPreguntas(resSesion.data.preguntas);
-            setIndice(resSesion.data.indice_actual);
-            setRespuestas(resSesion.data.respuestas_usuario);
-            setNombreExamen(resSesion.data.nombre_examen);
-            
-            setVista('juego'); 
-        } catch (e: any) {
-            console.log("Error al cargar la sesión de juego", e);
-            if (Platform.OS === 'web') {
-                window.alert("❌ Error cargando el examen. Revisa la consola.");
-            } else {
-                Alert.alert("Error", "No se pudo cargar el examen.");
-            }
-        } finally {
-            setLoadingLista(false);
-        }
-    };
-    
-    // LÓGICA DE ANÁLISIS MEJORADA (BLOQUEO + POLLING + PEAJE ENERGÍA)
-    // 🛡️ 1. FUNCIÓN PRINCIPAL (Aviso de seguridad)
-    const iniciarAnalisis = async () => {
-        // Bloqueo de seguridad inicial
-        if (!seleccionado || estadoTarea?.loading || loadingLista || !userId) return;
-        
-        // Comprobación de energía local
-        if (energia < 1) {
-            if (Platform.OS === 'web') {
-                window.alert("¡Sin Energía! ⚡\nNo tienes rayos suficientes. Espera a que se recarguen.");
-                return;
-            } else {
-                return Alert.alert("¡Sin Energía! ⚡", "No tienes rayos suficientes. Espera a que se recarguen.");
-            }
-        }
-
-        // Pop-up de advertencia compatible con WEB y MÓVIL
-        if (Platform.OS === 'web') {
-            const confirmar = window.confirm("⚠️ ¡CUIDADO!\n\nAsegúrate de que el archivo es realmente un EXAMEN. \n\nSi el archivo no tiene estructura de preguntas y respuestas, la IA fallará y perderás 1 energía igualmente.\n\n¿Quieres continuar?");
-            if (confirmar) {
-                ejecutarAnalisisReal();
-            }
-        } else {
-            Alert.alert(
-                "⚠️ ¡CUIDADO!",
-                "Asegúrate de que el archivo es realmente un EXAMEN. \n\nSi el archivo no tiene estructura de preguntas y respuestas, la IA fallará y perderás 1 energía igualmente.",
-                [
-                    { text: "Cancelar", style: "cancel" },
-                    { 
-                        text: "Entiendo, Analizar", 
-                        onPress: () => ejecutarAnalisisReal() // Si confirma, vamos al lío
-                    }
-                ]
-            );
-        }
-    };
-
-    // 🧠 2. FUNCIÓN DE EJECUCIÓN (Lógica técnica)
-    const ejecutarAnalisisReal = async () => {
-        // 👇 SOLUCIÓN: Le decimos a TypeScript que corte aquí si es nulo
-        if (!seleccionado) return;
-
-        setLoadingLista(true); 
-
-        try {
-            // Paso A: ¿Ya existe el examen?
-            const check = await api.get(`/estado-examen-oficial/${seleccionado}`);
-
-            if (check.data.listo && check.data.exito !== false) {
-                // Ya estaba listo, entramos gratis
-                await cargarJuegoDirecto(seleccionado); 
-            } else {
-                // Paso B: Cobro de energía en el servidor
-                const exito = await consumirEnergia(); 
-                if (!exito) {
-                    setLoadingLista(false); 
-                    return Alert.alert("Error", "No se ha podido procesar la energía."); 
-                }
-
-                // Paso C: Activación de la IA
-                const apunte = apuntesPorAnalizar.find(a => a.id === seleccionado); 
-                analizarExamenBackground(cursoId || 0, seleccionado, apunte?.nombre || "Examen Oficial"); 
-                
-                setSeleccionado(null); 
-            }
-        } catch (error) {
-            console.log("Fallo al conectar con el servidor."); 
-            Alert.alert("Error", "No se pudo conectar con el servidor.");
-        } finally {
-            setLoadingLista(false); 
-        }
-    };
-    // --- FUNCIONES DEL JUEGO ---
-    const marcarRespuesta = (opcionIdx: number) => {
-        // 1. Si ya hay una respuesta guardada para este índice, bloqueamos el clic
-        if (respuestas[indice] !== undefined) return;
-
-        // 2. Feedback táctil
-        feedbackSeleccion();
-
-        // 3. Guardamos la respuesta
-        const nuevasRespuestas = { ...respuestas, [indice]: opcionIdx };
-        setRespuestas(nuevasRespuestas);
-        
-        // 4. Comprobamos si es correcta para el sonido de acierto
-        const preguntaActual = preguntas[indice];
-        const correctaIdx = preguntaActual.Indice_correcta !== undefined ? preguntaActual.Indice_correcta : preguntaActual.respuesta_correcta;
-        if (opcionIdx === correctaIdx) {
-            feedbackAcierto();
-        }
-        
-        // 5. Auto-guardado silencioso
-        if (sesionId) {
-            api.post(`/guardar-progreso-oficial`, {
-                sesionId: sesionId,
-                indice: indice,
-                respuestas: nuevasRespuestas
-            }).catch(e => console.log("Error auto-guardado"));
-        }
-    };
-
-    const abandonarJuego = () => {
-        // Al darle a la pausa, vuelve al menú sin perder nada
-        setVista('lista');
-        cargarDatosIniciales(); // Refresca por si acaso
-    };
-
-    
-
-   const entregarAlServidor = async () => {
-        if (!sesionId || !userId) return;
-        
-        setProcesandoIA(true); 
-
-        try {
-            // 1. Enviamos a corregir
-            const res = await api.post(`/entregar-examen-oficial`, {
-                sesionId: sesionId,
-                user_id: userId
-            });
-            
-            const { aciertos, total } = res.data;
-            const xpGanada = aciertos * 10;
-            //  AQUÍ LE AVISAMOS AL CUADERNO 
-            await registrarProgresoMisiones('oficial', xpGanada);
-            // 2. Sumamos la XP y vemos si sube de nivel
-            let subioNivel = false;
-            let nuevoNivel = 1;
-            
-            try {
-                const resXp = await api.post(`/sumar-xp/${xpGanada}`);
-                if (resXp.data.subido) {
-                    subioNivel = true;
-                    nuevoNivel = resXp.data.nuevo_nivel;
-                }
-            } catch (errorXp) {
-                console.log("Error al sumar XP", errorXp);
-            }
-
-            // 3. 👇 LA MAGIA: Guardamos los datos y encendemos nuestro Modal unificado
-            setDatosVictoria({ aciertos, total, xp: xpGanada });
-            setSubidaPendiente({ si: subioNivel, nivel: subioNivel ? nuevoNivel : null });
-            
-            setShowVictoria(true);
-            
-        } catch (error) {
-            Alert.alert("Error", "Hubo un problema al corregir tu examen.");
-        } finally {
-            setProcesandoIA(false);
-        }
-    };
-    // ==========================================
-    // RENDERIZADO: VISTA 1 (LISTA / MENÚ)
-    // ==========================================
-    if (vista === 'lista') {
-        return (
-            <View style={{ flex: 1, backgroundColor: colors.background }}>
-                {/* CABECERA OFICIAL */}
-                <View style={[styles.header, { backgroundColor: colors.card }]}>
-                    <TouchableOpacity onPress={volver} style={{padding: 5}}>
-                        <Ionicons name="arrow-back" size={24} color={colors.text} />
-                    </TouchableOpacity>
-                    
-                    <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
-                        {cursoNombre}
-                    </Text>
-
-                    {/* 👇 AÑADE ESTO A LA DERECHA 👇 */}
-                    <View style={{ 
-                        flexDirection: 'row', alignItems: 'center', 
-                        backgroundColor: isDark ? '#334155' : '#eef2ff',
-                        paddingHorizontal: 10, paddingVertical: 5, 
-                        borderRadius: 15, borderWidth: 1, borderColor: colors.border
-                    }}>
-                        <Text style={{ fontSize: 16 }}>⚡</Text>
-                        <Text style={{ fontWeight: 'bold', color: colors.text, marginLeft: 4, fontSize: 13 }}>
-                            {energia}
-                        </Text>
-                    </View>
-                </View>
-
-               <ScrollView contentContainerStyle={{ padding: 20 }}>
-                    
-                    {/* CAJA INFORMATIVA SUPERIOR */}
-                    <View style={[styles.infoBox, { backgroundColor: isDark ? '#1e293b' : '#eff6ff' }]}>
-                        <Text style={{ fontSize: 30 }}>📝</Text>
-                        <View style={{ flex: 1, marginLeft: 15 }}>
-                            <Text style={{ color: colors.text, fontWeight: 'bold', fontSize: 15 }}>Simulacros Reales</Text>
-                            <Text style={{ color: colors.subtext, fontSize: 12 }}>Convierte PDFs en exámenes largos interactivos.</Text>
-                        </View>
-                    </View>
-
-                    {/* AVISO DE TAREA EN SEGUNDO PLANO */}
-                    {estadoTarea?.loading && (
-                        <View style={[styles.loadingTask, { backgroundColor: colors.card, borderColor: colors.tint }]}>
-                            <ActivityIndicator size="small" color={colors.tint} />
-                            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '500' }}>Procesando en 2º plano...</Text>
-                        </View>
-                    )}
-
-                    {/* ============================================== */}
-                    {/* SECCIÓN 1: PDFs POR ANALIZAR */}
-                    {/* ============================================== */}
-                    <Text style={[styles.label, { color: colors.text }]}>1. Analizar PDF Nuevo:</Text>
-                    
-                    {loadingLista ? (
-                        <ActivityIndicator size="large" color={colors.tint} style={{ marginTop: 20 }} />
-                    ) : apuntesPorAnalizar.length === 0 ? (
-                        <Text style={styles.emptyText}>No hay PDFs pendientes de analizar.</Text>
-                    ) : (
-                        apuntesPorAnalizar.map((item) => (
-                            <TouchableOpacity
-                                key={item.id}
-                                style={[styles.apunteCard, { backgroundColor: colors.card, borderColor: seleccionado === item.id ? colors.tint : colors.border }]}
-                                onPress={() => setSeleccionado(item.id)}
-                            >
-                                <Ionicons name="document-text" size={24} color={seleccionado === item.id ? colors.tint : colors.icon} />
-                                <Text style={[styles.apunteNombre, { color: colors.text }]} numberOfLines={1}>{item.nombre}</Text>
-                                {seleccionado === item.id && <Ionicons name="checkmark-circle" size={22} color={colors.tint} />}
-                            </TouchableOpacity>
-                        ))
-                    )}
-                    {/* Botón de Analizar (Solo sale si hay PDFs por analizar) */}
-                    {apuntesPorAnalizar.length > 0 && (
-                        <TouchableOpacity
-                            style={[styles.btnPrincipal, { 
-                                backgroundColor: (seleccionado && !estadoTarea?.loading && !loadingLista) ? colors.tint : colors.border, 
-                                paddingVertical: 12 
-                            }]}
-                            onPress={iniciarAnalisis}
-                            disabled={!seleccionado || estadoTarea?.loading || loadingLista} 
-                        >
-                            {loadingLista ? (
-                                <ActivityIndicator color="white" />
-                            ) : (
-                                <>
-                                    <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 18 }}>Extraer Preguntas (IA)</Text>
-                                    
-                                    {/* 👇 PÍLDORA DE COSTE DE ENERGÍA 👇 */}
-                                    <View style={{ 
-                                        flexDirection: 'row', alignItems: 'center', 
-                                        backgroundColor: 'rgba(0,0,0,0.15)',
-                                        paddingHorizontal: 12, paddingVertical: 4, 
-                                        borderRadius: 10, marginTop: 6 
-                                    }}>
-                                        <Text style={{fontSize: 14}}>⚡</Text>
-                                        <Text style={{color:'white', fontWeight:'bold', fontSize: 13, marginLeft: 4}}>x1</Text>
-                                    </View>
-                                </>
-                            )}
-                        </TouchableOpacity>
-                    )}
-
-                    {/* ============================================== */}
-                    {/* SECCIÓN 2: EXÁMENES LISTOS */}
-                    {/* ============================================== */}
-                    <View style={{ marginTop: 40 }}>
-                        <Text style={[styles.label, { color: colors.text }]}>2. Exámenes Listos:</Text>
-                        {apuntesListos.length === 0 ? (
-                            <Text style={styles.emptyText}>Aún no tienes exámenes procesados.</Text>
-                        ) : (
-                            apuntesListos.map((item) => (
-                                <TouchableOpacity
-                                    key={item.id}
-                                    style={[styles.apunteCard, { 
-                                        backgroundColor: isDark ? 'rgba(34, 197, 94, 0.1)' : '#f0fdf4', 
-                                        borderColor: colors.success 
-                                    }]}
-                                    // ¡Al tocar, entra directo a jugar sin preguntar!
-                                    onPress={() => cargarJuegoDirecto(item.id)} 
-                                >
-                                    <View style={{width: 40, height: 40, borderRadius: 20, backgroundColor: colors.success, justifyContent: 'center', alignItems: 'center'}}>
-                                        <Ionicons name="play" size={20} color="white" style={{marginLeft: 3}}/>
-                                    </View>
-                                    <Text style={[styles.apunteNombre, { color: colors.text, fontWeight: 'bold' }]} numberOfLines={1}>{item.nombre}</Text>
-                                    <Ionicons name="chevron-forward" size={24} color={colors.success} />
-                                </TouchableOpacity>
-                            ))
-                        )}
-                    </View>
-
-                    {/* ============================================== */}
-                    {/* SECCIÓN 3: HISTORIAL OFICIAL */}
-                    {/* ============================================== */}
-                    <View style={{ marginTop: 40 }}>
-                        <Text style={[styles.label, { color: colors.text }]}>Tu Historial Oficial:</Text>
-                        {historialOficial.length === 0 ? (
-                            <Text style={{color: colors.subtext, fontStyle: 'italic'}}>Aún no has completado ningún examen oficial.</Text>
-                        ) : (
-                            historialOficial.map((item) => (
-                                <View key={item.id} style={[styles.historialCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                                    <View>
-                                        <Text style={{ color: colors.text, fontWeight: 'bold' }}>{item.nombre_examen}</Text>
-                                        <Text style={{ color: colors.subtext, fontSize: 12 }}>{item.fecha}</Text>
-                                    </View>
-                                    <View style={{ alignItems: 'flex-end' }}>
-                                        <Text style={{ color: colors.tint, fontWeight: 'bold' }}>{item.aciertos}/{item.total}</Text>
-                                        <Text style={{ color: colors.success, fontSize: 11 }}>Completado</Text>
-                                    </View>
-                                </View>
-                            ))
-                        )}
-                    </View>
-                    
-                </ScrollView>
-                
-            </View>
-        );
-    }
-
-    // ==========================================
-    // RENDERIZADO: VISTA 2 (JUEGO DE EXAMEN LARGO)
-    // ==========================================
-    if (vista === 'juego') {
-        const preguntaActual = preguntas[indice];
-        if (!preguntaActual) return <ActivityIndicator style={{flex:1}} color={colors.tint} />;
-
-        // Variables para la lógica interactiva
-        const yaRespondida = respuestas[indice] !== undefined;
-        const seleccionUsuario = respuestas[indice];
-        const correctaIdx = preguntaActual.Indice_correcta !== undefined ? preguntaActual.Indice_correcta : preguntaActual.respuesta_correcta;
-
-        return (
-           <View style={{ flex: 1, backgroundColor: colors.background }}>
-                {/* CABECERA JUEGO */}
-                <View style={[styles.header, { backgroundColor: colors.card }]}>
-                    <TouchableOpacity onPress={abandonarJuego} style={{ flex: 1, alignItems: 'flex-start' }}>
-                        <Ionicons name="pause-circle" size={32} color={colors.tint} />
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity style={[styles.selectorBtn, { backgroundColor: isDark ? '#333' : '#f1f5f9' }]} onPress={() => setShowPanel(true)}>
-                        <Text style={{ color: colors.text, fontWeight: 'bold', fontSize: 15 }}>
-                            Pregunta {indice + 1} / {preguntas.length}
-                        </Text>
-                        <Ionicons name="grid-outline" size={20} color={colors.tint} />
-                    </TouchableOpacity>
-
-                    {/* Espacio vacío para equilibrar la cabecera y mantener el centro */}
-                    <View style={{ flex: 1 }} />
-                </View>
-
-                {/* PREGUNTA, OPCIONES Y EXPLICACIÓN */}
-                <ScrollView contentContainerStyle={{ padding: 20 }}>
-                    <Text style={[styles.pregunta, { color: colors.text }]}>{preguntaActual.Pregunta}</Text>
-
-                    {preguntaActual.Opciones.map((op: string, idx: number) => {
-                        // Lógica de colores adaptativa igual que en examen.tsx
-                        let bg = colors.card;
-                        let bc = colors.border;
-                        let tc = colors.text;
-
-                        if (yaRespondida) {
-                            if (idx === correctaIdx) { 
-                                bg = isDark ? 'rgba(34, 197, 94, 0.2)' : '#dcfce7'; 
-                                bc = colors.success; 
-                            } 
-                            else if (idx === seleccionUsuario) { 
-                                bg = isDark ? 'rgba(239, 68, 68, 0.2)' : '#fee2e2'; 
-                                bc = colors.error; 
-                            }
-                        }
-
-                        return (
-                            <TouchableOpacity
-                                key={idx}
-                                style={[styles.opcion, { backgroundColor: bg, borderColor: bc, borderWidth: 2 }]}
-                                onPress={() => marcarRespuesta(idx)}
-                                disabled={yaRespondida} // Bloquea el botón si ya respondió
-                            >
-                                <Text style={{ color: tc, flex: 1, fontSize: 16 }}>{op}</Text>
-                            </TouchableOpacity>
-                        );
-                    })}
-
-                    {/* CAJA DE EXPLICACIÓN (Solo sale cuando respondes) */}
-                    {yaRespondida && (
-                        <View style={[
-                            styles.explicacionBox, 
-                            { 
-                                backgroundColor: isDark ? '#431407' : '#fff7ed', 
-                                borderColor: isDark ? '#7c2d12' : '#ffedd5',
-                                marginTop: 20, padding: 20, borderRadius: 16, borderWidth: 1
-                            }
-                        ]}>
-                            <Text style={{fontWeight:'bold', color: isDark ? '#fbbf24' : '#b45309', marginBottom:5}}>Explicación:</Text>
-                            <Text style={{color: colors.text, marginBottom:15}}>
-                                {preguntaActual.Explicacion || "Respuesta correcta guardada."}
-                            </Text>
-                            
-                            {indice < preguntas.length - 1 ? (
-                                <TouchableOpacity 
-                                    style={{ padding: 16, borderRadius: 12, alignItems: 'center', backgroundColor: colors.text }} 
-                                    onPress={() => setIndice(indice + 1)}
-                                >
-                                    <Text style={{color: colors.background, fontWeight:'bold'}}>Siguiente 👉</Text>
-                                </TouchableOpacity>
-                            ) : (
-                                <TouchableOpacity 
-                                    style={{ padding: 16, borderRadius: 12, alignItems: 'center', backgroundColor: colors.success }} 
-                                    onPress={entregarAlServidor}
-                                >
-                                    <Text style={{color: 'white', fontWeight:'bold'}}>Finalizar Examen 🏆</Text>
-                                </TouchableOpacity>
-                            )}
-                        </View>
-                    )}
-                </ScrollView>
-
-                {/* MODAL GRID (LOS NÚMEROS) */}
-                <Modal visible={showPanel} animationType="slide">
-                    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-                        <View style={styles.modalHeader}>
-                            <Text style={{ fontSize: 20, fontWeight: 'bold', color: colors.text }}>Índice de Preguntas</Text>
-                            <TouchableOpacity onPress={() => setShowPanel(false)}>
-                                <Ionicons name="close" size={30} color={colors.text} />
-                            </TouchableOpacity>
-                        </View>
-                        <FlatList
-                            data={preguntas}
-                            numColumns={5}
-                            keyExtractor={(_, i) => i.toString()}
-                            renderItem={({ index }) => {
-                                // Colores en la cuadrícula para ver qué has fallado/acertado
-                                let boxBg = colors.card;
-                                let boxText = colors.text;
-                                if (respuestas[index] !== undefined) {
-                                    const esCorrecta = respuestas[index] === (preguntas[index].Indice_correcta ?? preguntas[index].respuesta_correcta);
-                                    boxBg = esCorrecta ? colors.success : colors.error;
-                                    boxText = 'white';
-                                }
-                                return (
-                                    <TouchableOpacity 
-                                        style={[styles.numBox, { backgroundColor: boxBg, borderColor: colors.border }]}
-                                        onPress={() => { setIndice(index); setShowPanel(false); }}
-                                    >
-                                        <Text style={{ color: boxText, fontWeight: 'bold' }}>{index + 1}</Text>
-                                    </TouchableOpacity>
-                                )
-                            }}
-                        />
-                    </SafeAreaView>
-                </Modal>
-                {/* 👇 MODAL DE VICTORIA UNIFICADO (EXAMEN OFICIAL - MODO PRÁCTICA) 👇 */}
-                <Modal visible={showVictoria} transparent animationType="fade">
-                    <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' }}>
-                        <View style={{ backgroundColor: colors.card, width: '85%', padding: 30, borderRadius: 25, alignItems: 'center', borderWidth: 1, borderColor: colors.border, elevation: 10 }}>
-                            
-                            {/* 1. Icono Principal (Siempre positivo al ser práctica) */}
-                            <Ionicons 
-                                name="trophy" 
-                                size={80} 
-                                color="#FFD700" 
-                                style={{ marginBottom: 10 }} 
-                            />
-                            
-                            <Text style={{ fontSize: 26, fontWeight: 'bold', color: colors.text, textAlign: 'center', marginBottom: 15 }}>
-                                ¡Examen Completado!
-                            </Text>
-
-                            {/* 2. Estilo Minimalista (Aciertos | XP) */}
-                            <View style={{flexDirection:'row', gap: 20, marginBottom: 25, alignItems: 'center', justifyContent: 'center', width: '100%'}}>
-                                <View style={{alignItems:'center', flex: 1}}>
-                                    <Text style={{fontSize:16, color: colors.subtext}}>Aciertos</Text>
-                                    <Text style={{fontSize:28, fontWeight:'bold', color: colors.text}}>
-                                        {datosVictoria.aciertos}/{datosVictoria.total}
-                                    </Text>
-                                </View>
-                                
-                                <View style={{width: 1, height: '80%', backgroundColor: colors.border}} />
-                                
-                                <View style={{alignItems:'center', flex: 1}}>
-                                    <Text style={{fontSize:16, color: colors.subtext}}>Experiencia</Text>
-                                    <Text style={{fontSize:28, fontWeight:'bold', color: '#8b5cf6'}}>
-                                        +{datosVictoria.xp} XP
-                                    </Text>
-                                </View>
-                            </View>
-
-                            {/* 3. Botón Continuar */}
-                            <TouchableOpacity 
-                                style={{ backgroundColor: colors.tint, paddingVertical: 15, paddingHorizontal: 30, borderRadius: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: '100%', gap: 10 }}
-                                onPress={() => {
-                                    setShowVictoria(false); 
-                                    if (subidaPendiente.si) {
-                                        // Si hay nivel, cohete 🚀
-                                        setTimeout(() => { setShowLevelUp(true); }, 300);
-                                    } else {
-                                        // Si no, volvemos al menú y recargamos
-                                        setTimeout(() => { 
-                                            setVista('lista'); 
-                                            cargarDatosIniciales(); 
-                                        }, 100);
-                                    }
-                                }}
-                            >
-                                <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 18 }}>Continuar</Text>
-                                <Ionicons name="arrow-forward-circle" size={24} color="#fff" />
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </Modal>
-                {/* 👇 MODAL ANIMACIÓN COHETE (SUBIDA DE NIVEL) 🚀 👇 */}
-                <Modal visible={showLevelUp} transparent animationType="fade">
-                    <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' }}>
-                        <View style={{ alignItems: 'center' }}>
-                            <Text style={{ fontSize: 100, marginBottom: 20 }}>🚀</Text>
-                            
-                            <Text style={{ fontSize: 32, fontWeight: 'bold', color: 'white', textAlign: 'center' }}>
-                                ¡DESPEGUE COMPLETADO!
-                            </Text>
-                            <Text style={{ fontSize: 20, color: '#fbbf24', marginTop: 10 }}>
-                                Has alcanzado el Nivel {subidaPendiente.nivel}
-                            </Text>
-
-                            <TouchableOpacity 
-                                style={{ marginTop: 50, backgroundColor: colors.tint, paddingVertical: 15, paddingHorizontal: 40, borderRadius: 30 }}
-                                onPress={() => {
-                                    setShowLevelUp(false);
-                                    setSubidaPendiente({ si: false, nivel: null }); 
-                                    
-                                    // Ya no vamos al Home. Volvemos a la lista de exámenes oficiales
-                                    setTimeout(() => { 
-                                        setVista('lista'); 
-                                        cargarDatosIniciales(); 
-                                    }, 100);
-                                }}
-                            >
-                                <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 18 }}>CONTINUAR MISIÓN</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </Modal>
-            </View>
-        );
-    }
-
-    return null;
+function formatT(seg: number) {
+  const m = Math.floor(seg / 60);
+  const s = seg % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-const styles = StyleSheet.create({
-    // Estilos Generales
-    header: { 
-      paddingHorizontal: 20, 
-      paddingTop: 50, // Espacio para la barra de estado
-      paddingBottom: 15,
-      flexDirection: 'row', 
-      alignItems: 'center', 
-      justifyContent: 'space-between', 
-      elevation: 4, // Sombra Android
-      zIndex: 10,
-  },
-  headerTitle: { 
-      fontSize: 20, 
-      fontWeight: 'bold', 
-      flex: 1, 
-      textAlign: 'center', 
-      marginHorizontal: 10 
-  },
-    // Estilos Vista Lista
-    infoBox: { flexDirection: 'row', padding: 20, borderRadius: 16, alignItems: 'center', marginBottom: 25 },
-    loadingTask: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 15, borderRadius: 12, marginBottom: 20, borderWidth: 1, borderStyle: 'dashed' },
-    label: { fontSize: 16, fontWeight: 'bold', marginBottom: 15 },
-    apunteCard: { flexDirection: 'row', padding: 18, borderRadius: 15, marginBottom: 12, alignItems: 'center', borderWidth: 2 },
-    apunteNombre: { flex: 1, marginLeft: 12, fontSize: 15 },
-    emptyText: { textAlign: 'center', color: '#94a3b8', marginTop: 20, fontStyle: 'italic' },
-    btnPrincipal: { marginTop: 20, padding: 18, borderRadius: 15, alignItems: 'center', elevation: 2 },
-    historialCard: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1 },
+export default function ExamenOficialScreen() {
+  const params = useLocalSearchParams();
+  const cursoId = params.cursoId ? parseInt(params.cursoId as string) : null;
+  const cursoNombre = (params.cursoNombre as string) || 'Mis Apuntes';
+  const { colors, isDark } = useTheme();
+  const { consumirVida, ganarRubies, fetchEconomia } = useEconomy();
+  const { feedbackSeleccion, feedbackVictoria } = useGameFeedback();
+  const volver = useSafeBack(cursoId ? { pathname: '/curso/[id]', params: { id: String(cursoId), nombre: cursoNombre } } : '/(tabs)');
 
-    // Estilos Vista Juego
-    selectorBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: 'rgba(0,0,0,0.05)', padding: 8, borderRadius: 10 },
-    pregunta: { fontSize: 22, fontWeight: 'bold', marginBottom: 30, lineHeight: 30 },
-    opcion: { flexDirection: 'row', alignItems: 'center', padding: 18, borderRadius: 15, marginBottom: 12, borderWidth: 2 },
-    circle: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#ddd', marginRight: 15 },
-    footer: { flexDirection: 'row', justifyContent: 'space-around', padding: 20, borderTopWidth: 1 },
-    navBtn: { backgroundColor: '#333', padding: 15, borderRadius: 50, width: 60, alignItems: 'center' },
-    explicacionBox: { marginTop: 25, padding: 20, borderRadius: 16, borderWidth: 1 },
-    // Estilos Modal Grid
-    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', padding: 20, alignItems: 'center' },
-    numBox: { flex: 1, height: 50, margin: 5, borderRadius: 10, justifyContent: 'center', alignItems: 'center', borderWidth: 1 }
-});
+  const [vista, setVista] = useState<'config' | 'cargando' | 'juego' | 'resultado'>('config');
+  const [apuntes, setApuntes] = useState<any[]>([]);
+  const [apunteSel, setApunteSel] = useState<any>(null);
+  const [fallosCount, setFallosCount] = useState(0);
+  const [total, setTotal] = useState(20);
+  const [pctFallos, setPctFallos] = useState(0); // 0 / 30 / 50
+  const [cargandoMsg, setCargandoMsg] = useState('');
+
+  // Juego
+  const [preguntas, setPreguntas] = useState<any[]>([]);
+  const [indice, setIndice] = useState(0);
+  const [respuestas, setRespuestas] = useState<Record<number, number>>({});
+  const [segundos, setSegundos] = useState(0);
+
+  // Resultado
+  const [res, setRes] = useState<any>(null);
+
+  useFocusEffect(useCallback(() => { cargar(); }, [cursoId]));
+
+  const cargar = async () => {
+    try {
+      const url = cursoId ? `/apuntes-curso/${cursoId}` : '/apuntes';
+      const r = await api.get(url);
+      setApuntes(r.data);
+      if (r.data.length === 1) setApunteSel(r.data[0]);
+      if (cursoId) {
+        const f = await api.get(`/fallos/${cursoId}`);
+        setFallosCount(f.data.total);
+      }
+    } catch {}
+  };
+
+  // ⏱️ Cronómetro
+  useEffect(() => {
+    if (vista !== 'juego') return;
+    const t = setInterval(() => setSegundos(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [vista]);
+
+  const empezar = async () => {
+    if (!apunteSel) return Alert.alert('Examen', 'Selecciona un PDF primero.');
+    const exito = await consumirVida();
+    if (!exito) return Alert.alert('¡Sin vidas! ❤️', 'Espera a que se recarguen o consigue más en la tienda.');
+
+    setVista('cargando');
+    try {
+      const nFallos = Math.min(Math.round((total * pctFallos) / 100), fallosCount);
+      const nPdf = total - nFallos;
+
+      let banco: any[] = [];
+      if (nFallos > 0 && cursoId) {
+        setCargandoMsg('Recuperando tus fallos...');
+        const f = await api.get(`/fallos/${cursoId}`);
+        banco = [...f.data.preguntas].sort(() => Math.random() - 0.5).slice(0, nFallos);
+      }
+
+      let frescas: any[] = [];
+      if (nPdf > 0) {
+        setCargandoMsg(`Generando ${nPdf} preguntas del temario...`);
+        const g = await api.post(`/generar-test-biblioteca/${apunteSel.id}`, null, { params: { cantidad: nPdf } });
+        frescas = g.data.preguntas || [];
+      }
+
+      const todas = [...frescas, ...banco].sort(() => Math.random() - 0.5);
+      if (todas.length === 0) throw new Error('No se generaron preguntas');
+
+      setPreguntas(todas);
+      setRespuestas({});
+      setIndice(0);
+      setSegundos(0);
+      setVista('juego');
+    } catch (e: any) {
+      setVista('config');
+      Alert.alert('Error', e?.response?.data?.detail || 'No se pudo crear el examen. Inténtalo de nuevo.');
+    }
+  };
+
+  const responder = (idx: number) => {
+    feedbackSeleccion();
+    setRespuestas(prev => ({ ...prev, [indice]: idx }));
+  };
+
+  const entregar = async () => {
+    const hacer = async () => {
+      let aciertos = 0, fallos = 0;
+      const falladas: any[] = [];
+      preguntas.forEach((q, i) => {
+        const r = respuestas[i];
+        if (r === undefined) return; // sin contestar
+        if (r === correctaDe(q)) aciertos++;
+        else { fallos++; falladas.push(q); }
+      });
+      const sinContestar = preguntas.length - aciertos - fallos;
+      const penalizacion = fallos / 4; // 4 fallos = -1 acierto
+      const neto = Math.max(0, aciertos - penalizacion);
+      const nota = Math.round((neto / preguntas.length) * 100) / 10; // sobre 10
+      const xp = aciertos * 10;
+
+      setRes({ aciertos, fallos, sinContestar, penalizacion, nota, xp, total: preguntas.length });
+      setVista('resultado');
+      feedbackVictoria();
+
+      // Persistencia: fallos al banco, XP, misiones, rubíes
+      try {
+        if (cursoId && falladas.length) await api.post('/registrar-fallos', { curso_id: cursoId, preguntas: falladas });
+        if (xp > 0) await api.post(`/sumar-xp/${xp}`);
+        await registrarProgresoMisiones('oficial', xp);
+        const rubies = nota >= 5 ? 15 : 5;
+        await ganarRubies(rubies);
+        setRes((prev: any) => ({ ...prev, rubies }));
+        fetchEconomia();
+      } catch {}
+    };
+    if (Platform.OS === 'web') {
+      if (window.confirm('¿Entregar el examen? Se corregirá con penalización.')) hacer();
+    } else {
+      Alert.alert('Entregar examen', '¿Seguro? Se corregirá con penalización (4 fallos = -1).', [
+        { text: 'Seguir', style: 'cancel' },
+        { text: 'Entregar', onPress: hacer },
+      ]);
+    }
+  };
+
+  // ===== RENDER =====
+  const Header = ({ titulo, onClose }: { titulo: string; onClose?: () => void }) => (
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, backgroundColor: colors.card }}>
+      <TouchableOpacity onPress={onClose || volver} style={{ padding: 5 }}>
+        <Ionicons name={onClose ? 'close' : 'arrow-back'} size={26} color={onClose ? colors.error : colors.text} />
+      </TouchableOpacity>
+      <Text style={{ fontSize: 18, fontWeight: '800', color: colors.text, flex: 1, textAlign: 'center', marginRight: 30 }} numberOfLines={1}>{titulo}</Text>
+    </View>
+  );
+
+  // --- CONFIG ---
+  if (vista === 'config') {
+    const nFallos = Math.min(Math.round((total * pctFallos) / 100), fallosCount);
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <Header titulo={`Examen · ${cursoNombre}`} />
+        <ScrollView contentContainerStyle={{ padding: 20 }}>
+          <View style={{ backgroundColor: isDark ? '#1e293b' : '#fff7ed', padding: 18, borderRadius: 16, flexDirection: 'row', alignItems: 'center', marginBottom: 22 }}>
+            <Text style={{ fontSize: 28 }}>📝</Text>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={{ color: colors.text, fontWeight: '800', fontSize: 15 }}>Simulacro de Examen</Text>
+              <Text style={{ color: colors.subtext, fontSize: 12 }}>Cronometrado y con penalización: 4 fallos restan 1 acierto.</Text>
+            </View>
+          </View>
+
+          {/* PDF */}
+          {apuntes.length > 1 && (
+            <>
+              <Text style={{ color: colors.text, fontWeight: '800', marginBottom: 10 }}>PDF base</Text>
+              {apuntes.map(a => (
+                <TouchableOpacity key={a.id}
+                  style={{ flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 14, marginBottom: 8, backgroundColor: apunteSel?.id === a.id ? colors.tint + '22' : colors.card, borderWidth: 2, borderColor: apunteSel?.id === a.id ? colors.tint : colors.border }}
+                  onPress={() => setApunteSel(a)}>
+                  <Ionicons name="document-text" size={22} color={colors.tint} />
+                  <Text style={{ color: colors.text, fontWeight: '600', flex: 1, marginLeft: 10 }} numberOfLines={1}>{a.nombre}</Text>
+                  {apunteSel?.id === a.id && <Ionicons name="checkmark-circle" size={22} color={colors.tint} />}
+                </TouchableOpacity>
+              ))}
+            </>
+          )}
+
+          {apuntes.length === 0 ? (
+            <View style={{ alignItems: 'center', marginTop: 40 }}>
+              <Ionicons name="document-outline" size={44} color={colors.subtext} />
+              <Text style={{ color: colors.subtext, marginTop: 12, textAlign: 'center' }}>Sube un PDF en este curso para hacer un examen.</Text>
+            </View>
+          ) : (
+            <>
+              {/* Nº preguntas */}
+              <Text style={{ color: colors.text, fontWeight: '800', marginTop: 10, marginBottom: 10 }}>Número de preguntas</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 22 }}>
+                {[20, 40, 60].map(n => {
+                  const a = total === n;
+                  return (
+                    <TouchableOpacity key={n} style={{ flex: 1, paddingVertical: 14, borderRadius: 14, alignItems: 'center', backgroundColor: a ? colors.tint : colors.card, borderWidth: 2, borderColor: a ? colors.tint : colors.border }} onPress={() => setTotal(n)}>
+                      <Text style={{ color: a ? '#fff' : colors.text, fontWeight: '800', fontSize: 18 }}>{n}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Mezcla con fallos */}
+              <Text style={{ color: colors.text, fontWeight: '800', marginBottom: 4 }}>Mezcla con tus fallos</Text>
+              <Text style={{ color: colors.subtext, fontSize: 12, marginBottom: 10 }}>
+                {fallosCount > 0 ? `Tienes ${fallosCount} fallos disponibles para repasar en el examen.` : 'No tienes fallos guardados todavía.'}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                {[{ l: 'Solo temario', v: 0 }, { l: '30% fallos', v: 30 }, { l: '50% fallos', v: 50 }].map(opt => {
+                  const a = pctFallos === opt.v;
+                  const dis = opt.v > 0 && fallosCount === 0;
+                  return (
+                    <TouchableOpacity key={opt.v} disabled={dis}
+                      style={{ flex: 1, paddingVertical: 12, borderRadius: 14, alignItems: 'center', backgroundColor: a ? '#FF4B4B' : colors.card, borderWidth: 2, borderColor: a ? '#FF4B4B' : colors.border, opacity: dis ? 0.4 : 1 }}
+                      onPress={() => setPctFallos(opt.v)}>
+                      <Text style={{ color: a ? '#fff' : colors.text, fontWeight: '700', fontSize: 12, textAlign: 'center' }}>{opt.l}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              {pctFallos > 0 && (
+                <Text style={{ color: colors.subtext, fontSize: 12, marginBottom: 18 }}>
+                  Este examen tendrá {total - nFallos} del temario + {nFallos} de tus fallos.
+                </Text>
+              )}
+
+              <TouchableOpacity
+                style={{ backgroundColor: colors.tint, borderRadius: 16, padding: 18, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 10, borderBottomWidth: 4, borderBottomColor: '#46A302', marginTop: 8 }}
+                onPress={empezar} disabled={!apunteSel}>
+                <Ionicons name="timer-outline" size={22} color="#fff" />
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 17 }}>Empezar examen</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                  <Ionicons name="heart" size={13} color="#fff" /><Text style={{ color: '#fff', fontWeight: '800', fontSize: 12, marginLeft: 3 }}>x1</Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // --- CARGANDO ---
+  if (vista === 'cargando') {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center', padding: 40 }}>
+        <ActivityIndicator size="large" color={colors.tint} />
+        <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', marginTop: 20, textAlign: 'center' }}>{cargandoMsg || 'Preparando examen...'}</Text>
+        <Text style={{ color: colors.subtext, fontSize: 13, marginTop: 8 }}>Esto puede tardar unos segundos</Text>
+      </View>
+    );
+  }
+
+  // --- JUEGO ---
+  if (vista === 'juego') {
+    const q = preguntas[indice];
+    const opciones = opcionesDe(q);
+    const respondidas = Object.keys(respuestas).length;
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        {/* Cabecera con cronómetro */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 50, paddingBottom: 12, paddingHorizontal: 20, backgroundColor: colors.card }}>
+          <TouchableOpacity onPress={() => {
+            if (Platform.OS === 'web') { if (window.confirm('¿Salir del examen? Perderás el progreso.')) setVista('config'); }
+            else Alert.alert('¿Salir?', 'Perderás el progreso del examen.', [{ text: 'Seguir', style: 'cancel' }, { text: 'Salir', style: 'destructive', onPress: () => setVista('config') }]);
+          }} style={{ padding: 4 }}>
+            <Ionicons name="close" size={26} color={colors.error} />
+          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: isDark ? '#334155' : '#eef2ff', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14 }}>
+            <Ionicons name="time-outline" size={16} color={colors.text} />
+            <Text style={{ color: colors.text, fontWeight: '800' }}>{formatT(segundos)}</Text>
+          </View>
+          <Text style={{ color: colors.subtext, fontWeight: '700' }}>{respondidas}/{preguntas.length}</Text>
+        </View>
+
+        {/* Progreso */}
+        <View style={{ height: 12, backgroundColor: isDark ? '#1e293b' : '#e5e7eb' }}>
+          <View style={{ height: '100%', width: `${Math.round(((indice + 1) / preguntas.length) * 100)}%`, backgroundColor: colors.tint }} />
+        </View>
+
+        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+          <Text style={{ color: colors.tint, fontWeight: '800', fontSize: 13, marginBottom: 10 }}>PREGUNTA {indice + 1} DE {preguntas.length}</Text>
+          <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700', lineHeight: 27, marginBottom: 22 }}>{enunciadoDe(q)}</Text>
+
+          {opciones.map((op: string, idx: number) => {
+            const sel = respuestas[indice] === idx;
+            return (
+              <TouchableOpacity key={idx}
+                style={{ padding: 16, borderRadius: 14, marginBottom: 12, borderWidth: 2, backgroundColor: sel ? colors.tint + '22' : colors.card, borderColor: sel ? colors.tint : colors.border, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                onPress={() => responder(idx)}>
+                <View style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: sel ? colors.tint : colors.border, backgroundColor: sel ? colors.tint : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+                  {sel && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </View>
+                <Text style={{ color: colors.text, fontSize: 15, flex: 1 }}>{op}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {/* Navegación */}
+        <View style={{ flexDirection: 'row', padding: 16, gap: 10, borderTopWidth: 1, borderColor: colors.border, backgroundColor: colors.card }}>
+          <TouchableOpacity disabled={indice === 0} style={{ flex: 1, padding: 14, borderRadius: 14, alignItems: 'center', borderWidth: 1, borderColor: colors.border, opacity: indice === 0 ? 0.4 : 1 }} onPress={() => setIndice(i => i - 1)}>
+            <Text style={{ color: colors.text, fontWeight: '700' }}>← Anterior</Text>
+          </TouchableOpacity>
+          {indice < preguntas.length - 1 ? (
+            <TouchableOpacity style={{ flex: 1, padding: 14, borderRadius: 14, alignItems: 'center', backgroundColor: colors.tint }} onPress={() => setIndice(i => i + 1)}>
+              <Text style={{ color: '#fff', fontWeight: '800' }}>Siguiente →</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={{ flex: 1, padding: 14, borderRadius: 14, alignItems: 'center', backgroundColor: '#FF4B4B' }} onPress={entregar}>
+              <Text style={{ color: '#fff', fontWeight: '800' }}>Entregar ✓</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  // --- RESULTADO ---
+  if (vista === 'resultado' && res) {
+    const aprobado = res.nota >= 5;
+    const colorNota = res.nota >= 5 ? '#58CC02' : '#FF4B4B';
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <Header titulo="Resultado del examen" />
+        <ScrollView contentContainerStyle={{ padding: 24, alignItems: 'center' }}>
+          <Text style={{ fontSize: 64, marginTop: 10 }}>{aprobado ? '🎉' : '📚'}</Text>
+          <Text style={{ fontSize: 24, fontWeight: '800', color: colors.text, marginTop: 6 }}>{aprobado ? '¡Aprobado!' : '¡Casi! A repasar'}</Text>
+
+          {/* Nota grande */}
+          <View style={{ width: 140, height: 140, borderRadius: 70, borderWidth: 12, borderColor: colorNota, justifyContent: 'center', alignItems: 'center', marginVertical: 24 }}>
+            <Text style={{ fontSize: 44, fontWeight: '800', color: colorNota }}>{res.nota.toFixed(1)}</Text>
+            <Text style={{ fontSize: 12, color: colors.subtext }}>nota /10</Text>
+          </View>
+
+          {/* Desglose */}
+          <View style={{ width: '100%', backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, padding: 18, gap: 12 }}>
+            {[
+              { l: 'Aciertos', v: res.aciertos, c: '#58CC02', icon: 'checkmark-circle' },
+              { l: 'Fallos', v: res.fallos, c: '#FF4B4B', icon: 'close-circle' },
+              { l: 'Sin contestar', v: res.sinContestar, c: colors.subtext, icon: 'remove-circle' },
+              { l: 'Penalización', v: `-${res.penalizacion.toFixed(2)}`, c: '#FF9600', icon: 'trending-down' },
+              { l: 'Tiempo', v: formatT(segundos), c: colors.text, icon: 'time' },
+            ].map(row => (
+              <View key={row.l} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name={row.icon as any} size={18} color={row.c} />
+                  <Text style={{ color: colors.text, fontSize: 15 }}>{row.l}</Text>
+                </View>
+                <Text style={{ color: row.c, fontWeight: '800', fontSize: 16 }}>{row.v}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* Recompensas */}
+          <View style={{ flexDirection: 'row', gap: 30, marginTop: 20 }}>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 24, fontWeight: '800', color: '#CE82FF' }}>+{res.xp}</Text>
+              <Text style={{ color: colors.subtext, fontSize: 12 }}>XP</Text>
+            </View>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ fontSize: 24, fontWeight: '800', color: '#FF3B6B' }}>+{res.rubies || 0}</Text>
+              <Text style={{ color: colors.subtext, fontSize: 12 }}>💎</Text>
+            </View>
+          </View>
+
+          {res.fallos > 0 && (
+            <Text style={{ color: colors.subtext, fontSize: 13, textAlign: 'center', marginTop: 16 }}>
+              Tus {res.fallos} fallos se guardaron para repasarlos en el Modo Fallos.
+            </Text>
+          )}
+
+          <TouchableOpacity style={{ backgroundColor: colors.tint, borderRadius: 16, padding: 16, alignItems: 'center', width: '100%', marginTop: 24, borderBottomWidth: 4, borderBottomColor: '#46A302' }} onPress={() => { setRes(null); setVista('config'); }}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Volver a exámenes</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  return null;
+}

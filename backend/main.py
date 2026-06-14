@@ -1026,6 +1026,19 @@ def obtener_fallos(curso_id: int, user_id: int = Depends(verificar_token)):
         conn.close()
 
 
+@app.delete("/fallos/{curso_id}")
+def limpiar_fallos(curso_id: int, user_id: int = Depends(verificar_token)):
+    """Vacía el banco de fallos de un curso."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM fallos WHERE user_id = %s AND curso_id = %s", (user_id, curso_id))
+        conn.commit()
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+
 @app.post("/superar-fallo")
 def superar_fallo(datos: dict, user_id: int = Depends(verificar_token)):
     """Elimina una pregunta del banco (acertada en Modo Fallos = dominada)."""

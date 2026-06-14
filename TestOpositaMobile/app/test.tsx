@@ -219,6 +219,25 @@ export default function ExamenScreen() {
           Alert.alert("Error", "No se pudo cargar el Modo Fallos.");
       }
   };
+
+  // Vaciar el banco de fallos del curso
+  const limpiarFallos = () => {
+      if (!cursoId || fallosCount === 0) return;
+      const hacer = async () => {
+          try {
+              await api.delete(`/fallos/${cursoId}`);
+              setFallosCount(0);
+          } catch {}
+      };
+      if (Platform.OS === 'web') {
+          if (window.confirm(`¿Vaciar tus ${fallosCount} preguntas falladas? No se puede deshacer.`)) hacer();
+      } else {
+          Alert.alert("Vaciar fallos", `¿Vaciar tus ${fallosCount} preguntas falladas?`, [
+              { text: "Cancelar", style: "cancel" },
+              { text: "Vaciar", style: "destructive", onPress: hacer },
+          ]);
+      }
+  };
   
   const generarTestDesdeTab = async () => {
     if (!apunteSeleccionado) return Alert.alert("Ojo", "Selecciona un apunte primero");
@@ -463,8 +482,13 @@ const abrirRevision = (intento: any) => {
                     </Text>
                 </View>
                 {fallosCount > 0 && (
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
-                        <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 16 }}>{fallosCount}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <View style={{ backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                            <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 16 }}>{fallosCount}</Text>
+                        </View>
+                        <TouchableOpacity onPress={limpiarFallos} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={{ padding: 4 }}>
+                            <Ionicons name="trash-outline" size={20} color="rgba(255,255,255,0.85)" />
+                        </TouchableOpacity>
                     </View>
                 )}
             </TouchableOpacity>
@@ -768,6 +792,16 @@ const abrirRevision = (intento: any) => {
         </View>
         {/* 👆👆 FIN CABECERA 👆👆 */}
 
+        {/* 🟢 BARRA DE PROGRESO (siempre visible) */}
+        <View style={{ height: 14, backgroundColor: isDark ? '#1e293b' : '#e5e7eb', borderRadius: 7, marginBottom: 20, overflow: 'hidden' }}>
+            <View style={{
+                height: '100%',
+                width: `${Math.round(((indice + (mostrarExplicacion ? 1 : 0)) / Math.max(1, examData.length)) * 100)}%`,
+                backgroundColor: colors.tint,
+                borderRadius: 7,
+            }} />
+        </View>
+
         {/* PREGUNTA */}
         <Text style={[styles.preguntaTexto, { color: colors.text }]}>{enunciado}</Text>
 
@@ -826,35 +860,47 @@ const abrirRevision = (intento: any) => {
             <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' }}>
                 <View style={{ backgroundColor: colors.card, width: '85%', padding: 30, borderRadius: 25, alignItems: 'center', borderWidth: 1, borderColor: colors.border, elevation: 10 }}>
                     
-                    <Ionicons 
-                        name="trophy" 
-                        size={80} 
-                        color="#FFD700" 
-                        style={{ marginBottom: 10 }} 
-                    />
-                    
-                    <Text style={{ fontSize: 26, fontWeight: 'bold', color: colors.text, textAlign: 'center', marginBottom: 15 }}>
-                        ¡Test Finalizado!
-                    </Text>
+                    {(() => {
+                        const total = Math.max(1, examData.length);
+                        const prec = Math.round((puntuacion / total) * 100);
+                        const fallos = examData.length - puntuacion;
+                        const aprobado = prec >= 50;
+                        const msg = prec >= 90 ? '¡Excelente! 🌟' : prec >= 70 ? '¡Muy bien! 💪' : prec >= 50 ? '¡Vas mejorando! 📈' : '¡A repasar esos fallos! 🔁';
+                        const colorPrec = prec >= 70 ? '#58CC02' : prec >= 50 ? '#FF9600' : '#FF4B4B';
+                        return (
+                          <>
+                            <Text style={{ fontSize: 56 }}>{aprobado ? '🏆' : '📚'}</Text>
+                            <Text style={{ fontSize: 24, fontWeight: '800', color: colors.text, textAlign: 'center', marginTop: 4 }}>
+                                ¡Test Finalizado!
+                            </Text>
+                            <Text style={{ fontSize: 15, color: colorPrec, fontWeight: '700', marginTop: 4, marginBottom: 18 }}>{msg}</Text>
 
-                    {/* Estilo Minimalista (Aciertos | XP) */}
-                    <View style={{flexDirection:'row', gap: 20, marginBottom: 25, alignItems: 'center', justifyContent: 'center', width: '100%'}}>
-                        <View style={{alignItems:'center', flex: 1}}>
-                            <Text style={{fontSize:16, color: colors.subtext}}>Aciertos</Text>
-                            <Text style={{fontSize:28, fontWeight:'bold', color: colors.text}}>
-                                {puntuacion}/{examData.length}
-                            </Text>
-                        </View>
-                        
-                        <View style={{width: 1, height: '80%', backgroundColor: colors.border}} />
-                        
-                        <View style={{alignItems:'center', flex: 1}}>
-                            <Text style={{fontSize:16, color: colors.subtext}}>Experiencia</Text>
-                            <Text style={{fontSize:28, fontWeight:'bold', color: '#8b5cf6'}}>
-                                +{xpGanada} XP
-                            </Text>
-                        </View>
-                    </View>
+                            {/* Anillo de precisión */}
+                            <View style={{ width: 110, height: 110, borderRadius: 55, borderWidth: 10, borderColor: colorPrec, justifyContent: 'center', alignItems: 'center', marginBottom: 18 }}>
+                                <Text style={{ fontSize: 30, fontWeight: '800', color: colorPrec }}>{prec}%</Text>
+                                <Text style={{ fontSize: 11, color: colors.subtext }}>precisión</Text>
+                            </View>
+
+                            {/* Aciertos | Fallos | XP */}
+                            <View style={{flexDirection:'row', marginBottom: 25, alignItems: 'center', justifyContent: 'center', width: '100%'}}>
+                                <View style={{alignItems:'center', flex: 1}}>
+                                    <Text style={{fontSize:22, fontWeight:'800', color: '#58CC02'}}>{puntuacion}</Text>
+                                    <Text style={{fontSize:12, color: colors.subtext}}>Aciertos</Text>
+                                </View>
+                                <View style={{width: 1, height: 32, backgroundColor: colors.border}} />
+                                <View style={{alignItems:'center', flex: 1}}>
+                                    <Text style={{fontSize:22, fontWeight:'800', color: '#FF4B4B'}}>{fallos}</Text>
+                                    <Text style={{fontSize:12, color: colors.subtext}}>Fallos</Text>
+                                </View>
+                                <View style={{width: 1, height: 32, backgroundColor: colors.border}} />
+                                <View style={{alignItems:'center', flex: 1}}>
+                                    <Text style={{fontSize:22, fontWeight:'800', color: '#CE82FF'}}>+{xpGanada}</Text>
+                                    <Text style={{fontSize:12, color: colors.subtext}}>XP</Text>
+                                </View>
+                            </View>
+                          </>
+                        );
+                    })()}
 
                     <TouchableOpacity 
                         style={{ backgroundColor: colors.tint, paddingVertical: 15, paddingHorizontal: 30, borderRadius: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: '100%', gap: 10 }}

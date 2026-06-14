@@ -1003,6 +1003,16 @@ const siguientePregunta = async () => {
                       </View>
                   </View>
 
+                  {/* 🟢 BARRA DE PROGRESO DEL NIVEL (siempre visible) */}
+                  <View style={{ height: 14, backgroundColor: isDark ? '#1e293b' : '#e5e7eb', borderRadius: 7, marginBottom: 18, overflow: 'hidden' }}>
+                      <View style={{
+                          height: '100%',
+                          width: `${Math.round(((indicePregunta + (mostrarExplicacion ? 1 : 0)) / Math.max(1, preguntasActuales.length)) * 100)}%`,
+                          backgroundColor: modoRepaso ? '#FF9600' : colors.tint,
+                          borderRadius: 7,
+                      }} />
+                  </View>
+
                   {/* ETIQUETA TIPO + COMODÍN */}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                       <View style={[styles.badgeTipo, { marginBottom: 0 }, esVF && {backgroundColor: colors.success}, esHuecos && {backgroundColor: '#8b5cf6'}]}>
